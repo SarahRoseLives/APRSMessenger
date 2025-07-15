@@ -20,11 +20,8 @@ class _LandingPageState extends State<LandingPage> {
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmController = TextEditingController();
 
-  WebSocketChannel? _channel;
-
   @override
   void dispose() {
-    // Do NOT close the channel here! It will be passed to HomeScreen and closed there.
     _callsignController.dispose();
     _passcodeController.dispose();
     _passwordController.dispose();
@@ -32,82 +29,108 @@ class _LandingPageState extends State<LandingPage> {
     super.dispose();
   }
 
-  // Only open the WebSocket and send data, pass the open channel to HomeScreen.
-  void _connectAndSend(Map<String, dynamic> data, void Function(WebSocketChannel channel) onConnected) {
-    _channel = WebSocketChannel.connect(
-      Uri.parse('ws://localhost:8080/ws'),
-    );
-    _channel!.sink.add(jsonEncode(data));
-    onConnected(_channel!);
-  }
-
   void _login() {
+    if (isLoading) return;
     setState(() {
       isLoading = true;
       errorMsg = null;
     });
+
     final callsign = _callsignController.text.trim().toUpperCase();
     final password = _passwordController.text;
     if (callsign.isEmpty || password.isEmpty) {
       setState(() {
-        errorMsg = "Fill in all fields";
+        errorMsg = "Callsign and password are required.";
         isLoading = false;
       });
       return;
     }
-    _connectAndSend({
+
+    final channel = WebSocketChannel.connect(Uri.parse('ws://localhost:8080/ws'));
+    channel.sink.add(jsonEncode({
       "action": "login",
       "callsign": callsign,
       "password": password,
-    }, (channel) {
-      setState(() => isLoading = false);
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => HomeScreen(callsign: callsign, channel: channel)),
-      );
-    });
+    }));
+
+    // The HomeScreen will handle the login response.
+    setState(() => isLoading = false);
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => HomeScreen(callsign: callsign, channel: channel)),
+    );
   }
 
   void _register() {
+    if (isLoading) return;
     setState(() {
       isLoading = true;
       errorMsg = null;
     });
+
     final callsign = _callsignController.text.trim().toUpperCase();
     final passcode = _passcodeController.text.trim();
     final password = _passwordController.text;
     final confirm = _confirmController.text;
     if (callsign.isEmpty || passcode.isEmpty || password.isEmpty || confirm.isEmpty) {
       setState(() {
-        errorMsg = "Fill in all fields";
+        errorMsg = "Please fill in all fields.";
         isLoading = false;
       });
       return;
     }
     if (password != confirm) {
       setState(() {
-        errorMsg = "Passwords do not match";
+        errorMsg = "Passwords do not match.";
         isLoading = false;
       });
       return;
     }
-    _connectAndSend({
+
+    // *** THIS IS THE FIX ***
+    // Establish one channel, send create, wait for response, then send login.
+    final channel = WebSocketChannel.connect(Uri.parse('ws://localhost:8080/ws'));
+
+    // Listen for the response to the create_account request.
+    channel.stream.first.then((response) {
+      if (!mounted) return;
+      try {
+        final decoded = jsonDecode(response);
+        if (decoded['success'] == true) {
+          // If registration is successful, send the login request on the same channel.
+          channel.sink.add(jsonEncode({
+            "action": "login",
+            "callsign": callsign,
+            "password": password,
+          }));
+          // Navigate to the home screen, which will handle the login response.
+          setState(() => isLoading = false);
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => HomeScreen(callsign: callsign, channel: channel)),
+          );
+        } else {
+          // If registration failed, show the error and close the connection.
+          setState(() {
+            errorMsg = decoded['error'] ?? "Registration failed.";
+            isLoading = false;
+          });
+          channel.sink.close();
+        }
+      } catch (e) {
+        setState(() {
+          errorMsg = "An unexpected error occurred.";
+          isLoading = false;
+        });
+        channel.sink.close();
+      }
+    });
+
+    // Send the initial create_account request.
+    channel.sink.add(jsonEncode({
       "action": "create_account",
       "callsign": callsign,
       "passcode": passcode,
       "password": password,
-    }, (channel) {
-      setState(() => isLoading = false);
-      // After registration, immediately login using the same open channel.
-      _connectAndSend({
-        "action": "login",
-        "callsign": callsign,
-        "password": password,
-      }, (loginChannel) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => HomeScreen(callsign: callsign, channel: loginChannel)),
-        );
-      });
-    });
+    }));
   }
 
   @override

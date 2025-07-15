@@ -2,6 +2,7 @@ package aprs
 
 import (
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,38 +27,56 @@ func NewSession(callsign string) *Session {
 	}
 }
 
-// AttachWebSocket attaches a websocket client to this session, registering with global APRS manager
+// AttachWebSocket attaches a websocket client to this session.
+// It registers the user with the global APRS manager on the first connection.
 func (s *Session) AttachWebSocket(ws *websocket.Conn) {
 	s.wsMu.Lock()
+	// If this is the first client, register the user with the APRS listener
+	if len(s.wsClients) == 0 {
+		log.Printf("[APRS] First WebSocket attached, registering callback for %s", s.Callsign)
+		GetAPRSManager().RegisterUser(s.Callsign, func(from, to, msg string) {
+			if err := db.StoreMessage(to, from, msg); err != nil {
+				log.Printf("[APRS] Failed to store message for %s: %v", to, err)
+			}
+			s.broadcastWSMessage(from, to, msg)
+		})
+	}
 	s.wsClients[ws] = struct{}{}
 	s.wsMu.Unlock()
 	log.Printf("[APRS] WebSocket attached to session %s", s.Callsign)
-	go s.keepAliveWS(ws)
 
-	// Register callback with global APRS manager
-	GetAPRSManager().RegisterUser(s.Callsign, func(from, to, msg string) {
-		// Save to DB before deliver
-		if err := db.StoreMessage(to, from, msg); err != nil {
-			log.Printf("[APRS] Failed to store message for %s: %v", to, err)
-		}
-		s.broadcastWSMessage(from, to, msg)
-	})
-	// On attach, send any undelivered messages from DB
-	go s.deliverUndeliveredHistory(ws)
+	go s.keepAliveWS(ws)
+	// *** REPLACE THE GOROUTINE CALL ***
+	go s.deliverHistory(ws)
 }
 
-// keepAliveWS sends pings and removes ws client on disconnect.
+// DetachWebSocket removes a websocket client from the session.
+// It unregisters the user from the global APRS manager if it's the last client.
+func (s *Session) DetachWebSocket(ws *websocket.Conn) {
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+
+	if _, ok := s.wsClients[ws]; !ok {
+		return // Already detached
+	}
+
+	delete(s.wsClients, ws)
+	log.Printf("[APRS] WebSocket detached from session %s. Remaining clients: %d", s.Callsign, len(s.wsClients))
+
+	if len(s.wsClients) == 0 {
+		GetAPRSManager().UnregisterUser(s.Callsign)
+		log.Printf("[APRS] Last WebSocket detached, unregistered callback for %s", s.Callsign)
+	}
+}
+
+// keepAliveWS sends pings and removes the websocket client on disconnect.
 func (s *Session) keepAliveWS(ws *websocket.Conn) {
-	defer func() {
-		s.wsMu.Lock()
-		delete(s.wsClients, ws)
-		s.wsMu.Unlock()
-		log.Printf("[APRS] WebSocket detached from session %s", s.Callsign)
-	}()
+	defer s.DetachWebSocket(ws)
 	for {
-		time.Sleep(5 * time.Second)
-		if err := ws.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(time.Second)); err != nil {
-			break
+		time.Sleep(30 * time.Second)
+		if err := ws.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
+			log.Printf("[APRS] Ping failed for %s, closing keep-alive.", s.Callsign)
+			return
 		}
 	}
 }
@@ -80,30 +99,47 @@ func (s *Session) broadcastWSMessage(from, to, msg string) {
 	}
 }
 
-// deliverUndeliveredHistory sends any undelivered messages from DB to the websocket, and marks them delivered.
-func (s *Session) deliverUndeliveredHistory(ws *websocket.Conn) {
-	messages, err := db.ListUndeliveredMessages(s.Callsign)
+// *** REPLACE deliverUndeliveredHistory with this new deliverHistory function ***
+// deliverHistory sends the full conversation history to the websocket and marks
+// any new incoming messages as delivered.
+func (s *Session) deliverHistory(ws *websocket.Conn) {
+	messages, err := db.ListAllMessagesForUser(s.Callsign)
 	if err != nil {
-		log.Printf("[APRS] Failed to fetch undelivered messages for %s: %v", s.Callsign, err)
+		log.Printf("[APRS] Failed to fetch full history for %s: %v", s.Callsign, err)
 		return
 	}
 	if len(messages) == 0 {
 		return
 	}
-	var ids []int
+
+	log.Printf("[APRS] Delivering %d history messages to %s", len(messages), s.Callsign)
+	var undeliveredIDs []int
 	for _, m := range messages {
 		resp := map[string]interface{}{
-			"aprs_msg": true,
-			"from":     m.FromCallsign,
-			"to":       m.ToCallsign,
-			"message":  m.Message,
-			"history":  true,
+			"aprs_msg":   true,
+			"from":       m.FromCallsign,
+			"to":         m.ToCallsign,
+			"message":    m.Message,
+			"history":    true,
 			"created_at": m.CreatedAt.Format(time.RFC3339),
 		}
-		_ = ws.WriteJSON(resp)
-		ids = append(ids, m.ID)
+		if err := ws.WriteJSON(resp); err != nil {
+			log.Printf("Error sending history to %s: %v", s.Callsign, err)
+			return // Stop trying if connection is bad
+		}
+
+		// Check if this message was an undelivered INCOMING message.
+		isIncoming := m.ToCallsign == s.Callsign || strings.HasPrefix(m.ToCallsign, s.Callsign+"-")
+		if isIncoming && !m.IsDelivered {
+			undeliveredIDs = append(undeliveredIDs, m.ID)
+		}
 	}
-	_ = db.MarkMessagesDelivered(ids)
+
+	// Mark only the new incoming messages as delivered.
+	if len(undeliveredIDs) > 0 {
+		_ = db.MarkMessagesDelivered(undeliveredIDs)
+		log.Printf("[APRS] Marked %d messages as delivered for %s", len(undeliveredIDs), s.Callsign)
+	}
 }
 
 // SessionsManager manages all in-memory user sessions.

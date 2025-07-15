@@ -24,7 +24,7 @@ func main() {
 	}
 	defer db.Close()
 
-	// Start global persistent APRS session (as K8SDR-AM) for all users
+	// Start the global APRS Manager. It now handles both listening and sending.
 	aprs.GetAPRSManager().Start()
 
 	http.HandleFunc("/ws", ws.HandleWebSocket)

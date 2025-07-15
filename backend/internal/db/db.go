@@ -130,12 +130,49 @@ func StoreMessage(to, from, msg string) error {
 	return err
 }
 
+// *** ADD THIS NEW FUNCTION ***
+// ListAllMessagesForUser returns all messages where the user is either the sender or the recipient.
+func ListAllMessagesForUser(callsign string) ([]*Message, error) {
+	const query = `
+		SELECT id, to_callsign, from_callsign, message, created_at, is_delivered
+		FROM messages
+		WHERE
+			(from_callsign = ?) OR
+			(to_callsign = ? OR to_callsign LIKE ? || '-%')
+		ORDER BY created_at ASC
+	`
+	rows, err := db.Query(query, callsign, callsign, callsign)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []*Message
+	for rows.Next() {
+		var m Message
+		var created string
+		if err := rows.Scan(&m.ID, &m.ToCallsign, &m.FromCallsign, &m.Message, &created, &m.IsDelivered); err != nil {
+			return nil, err
+		}
+		m.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", created)
+		messages = append(messages, &m)
+	}
+	return messages, nil
+}
+// ****************************
+
 // ListUndeliveredMessages returns all undelivered messages for a callsign, ordered oldest first.
 func ListUndeliveredMessages(callsign string) ([]*Message, error) {
-	rows, err := db.Query(
-		"SELECT id, to_callsign, from_callsign, message, created_at, is_delivered FROM messages WHERE to_callsign = ? AND is_delivered = 0 ORDER BY created_at ASC",
-		callsign,
-	)
+	// The user's callsign is a base callsign (e.g., "K8SDR"), but messages in the DB
+	// may be addressed to a specific SSID (e.g., "K8SDR-9"). This query finds all
+	// messages for the base callsign, with or without an SSID.
+	const query = `
+		SELECT id, to_callsign, from_callsign, message, created_at, is_delivered
+		FROM messages
+		WHERE (to_callsign = ? OR to_callsign LIKE ? || '-%') AND is_delivered = 0
+		ORDER BY created_at ASC`
+
+	rows, err := db.Query(query, callsign, callsign) // Pass callsign twice for both placeholders
 	if err != nil {
 		return nil, err
 	}

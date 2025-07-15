@@ -98,9 +98,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final text = _chatController.text.trim();
     if (text.isEmpty || selectedIndex == null) return;
     final contact = recents[selectedIndex!];
+    // *** THIS IS THE FIX ***
+    // The key must be "to_callsign" to match the backend.
     final msg = {
       "action": "send_message",
-      "to": contact.callsign,
+      "to_callsign": contact.callsign,
       "message": text,
     };
     widget.channel.sink.add(jsonEncode(msg));
