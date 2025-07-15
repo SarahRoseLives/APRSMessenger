@@ -1,5 +1,7 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'pages/landing_page.dart';
+import 'pages/landing_page.dart' as web;
+import 'appui/landing_page.dart' as app;
 
 void main() => runApp(const APRSMessengerApp());
 
@@ -37,7 +39,8 @@ class APRSMessengerApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const LandingPage(),
+      // Use kIsWeb to determine which UI to show
+      home: kIsWeb ? const web.LandingPage() : const app.LandingPage(),
     );
   }
 }
