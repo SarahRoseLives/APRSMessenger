@@ -146,6 +146,15 @@ func (am *APRSManager) UnregisterUser(callsign string) {
 	log.Printf("[APRS Manager] Unregistered callback for %s", cleanCallsign)
 }
 
+// GetCallback returns the callback function for a callsign (for testing)
+func (am *APRSManager) GetCallback(callsign string) (func(from, to, msg string), bool) {
+	am.setMu.RLock()
+	defer am.setMu.RUnlock()
+	cleanCallsign := toUpperNoSpace(callsign)
+	cb, ok := am.callbacks[cleanCallsign]
+	return cb, ok
+}
+
 func baseCallsign(cs string) string {
 	if idx := strings.Index(cs, "-"); idx != -1 {
 		return cs[:idx]
