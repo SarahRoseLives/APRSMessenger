@@ -69,8 +69,9 @@ class _HomeScreenState extends State<HomeScreen> {
         final fromBaseCallsign = from.split('-').first;
         final fromMe = fromBaseCallsign == userBaseCallsign;
 
-        final contactCallsign = fromMe ? to : from;
+        final otherPartyCallsign = fromMe ? to : from;
         final ownCallsignForChat = fromMe ? from : to;
+        final groupingKey = otherPartyCallsign.split('-').first;
 
         final newMessage = ChatMessage(
           fromMe: fromMe,
@@ -78,12 +79,13 @@ class _HomeScreenState extends State<HomeScreen> {
           time: _formatTime(createdAt),
         );
 
-        final idx = recents.indexWhere((c) => c.callsign == contactCallsign);
+        final idx = recents.indexWhere((c) => c.groupingId == groupingKey);
 
         if (idx == -1) {
-          // Contact does not exist, create a new one.
+          // Contact group does not exist, create a new one.
           recents.add(RecentContact(
-            callsign: contactCallsign,
+            groupingId: groupingKey,
+            callsign: otherPartyCallsign,
             ownCallsign: ownCallsignForChat,
             lastMessage: text,
             time: _formatTime(createdAt),
@@ -91,7 +93,7 @@ class _HomeScreenState extends State<HomeScreen> {
             messages: [newMessage],
           ));
         } else {
-          // Contact exists, update it immutably.
+          // Contact group exists, update it immutably.
           final contact = recents[idx];
 
           final updatedMessages = List<ChatMessage>.from(contact.messages)
@@ -101,11 +103,12 @@ class _HomeScreenState extends State<HomeScreen> {
           updatedMessages.sort((a, b) => (a.time ?? "").compareTo(b.time ?? ""));
 
           recents[idx] = contact.copyWith(
-            ownCallsign: ownCallsignForChat,
+            callsign: otherPartyCallsign, // Update to the latest full callsign
+            ownCallsign: ownCallsignForChat, // Update our own callsign used in chat
             lastMessage: text,
             time: _formatTime(createdAt),
             unread: (!fromMe && !isHistory) || contact.unread,
-            messages: updatedMessages, // Pass the new immutable list.
+            messages: updatedMessages,
           );
         }
         // Sort the recents list to bring the most recent conversations to the top

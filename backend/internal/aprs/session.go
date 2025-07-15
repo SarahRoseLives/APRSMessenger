@@ -34,7 +34,7 @@ func NewSession(callsign string) *Session {
 // It registers the user with the global APRS manager on the first connection.
 func (s *Session) AttachWebSocket(ws *websocket.Conn) {
 	s.wsMu.Lock()
-	// If this is the first client, register the user with the APRS listener
+	// If this is the first client, register the user with the global APRS listener
 	if len(s.wsClients) == 0 {
 		log.Printf("[APRS] First WebSocket attached, registering callback for %s", s.Callsign)
 		GetAPRSManager().RegisterUser(s.Callsign, func(from, to, msg string) {
@@ -110,6 +110,7 @@ func (s *Session) BroadcastMessage(from, to, msg string, exclude *websocket.Conn
 // deliverHistory sends the full conversation history to the websocket and marks
 // any new incoming messages as delivered.
 func (s *Session) deliverHistory(ws *websocket.Conn) {
+	// Use the new function to get all messages for the user.
 	messages, err := db.ListAllMessagesForUser(s.Callsign)
 	if err != nil {
 		log.Printf("[APRS] Failed to fetch full history for %s: %v", s.Callsign, err)
@@ -127,7 +128,7 @@ func (s *Session) deliverHistory(ws *websocket.Conn) {
 			"from":       m.FromCallsign,
 			"to":         m.ToCallsign,
 			"message":    m.Message,
-			"history":    true,
+			"history":    true, // Mark as history so client can suppress notifications
 			"created_at": m.CreatedAt.Format(time.RFC3339),
 		}
 		if err := ws.WriteJSON(resp); err != nil {
@@ -136,7 +137,9 @@ func (s *Session) deliverHistory(ws *websocket.Conn) {
 		}
 
 		// Check if this message was an undelivered INCOMING message.
-		isIncoming := m.ToCallsign == s.Callsign || strings.HasPrefix(m.ToCallsign, s.Callsign+"-")
+		// The base callsign of the recipient must match our session's callsign.
+		toBaseCallsign := strings.Split(m.ToCallsign, "-")[0]
+		isIncoming := toBaseCallsign == s.Callsign
 		if isIncoming && !m.IsDelivered {
 			undeliveredIDs = append(undeliveredIDs, m.ID)
 		}
@@ -196,7 +199,8 @@ func (sm *SessionsManager) GetSession(callsign string) *Session {
 	return sm.sessions[callsign]
 }
 
-// GenerateSessionToken creates a new, random token for a user, valid for a short time.
+// GenerateSessionToken creates a new, random token for a user.
+// Token remains valid until it is used for login (single-use).
 func (sm *SessionsManager) GenerateSessionToken(callsign string) (string, error) {
 	b := make([]byte, 16) // 128 bits of randomness
 	if _, err := rand.Read(b); err != nil {
@@ -210,15 +214,7 @@ func (sm *SessionsManager) GenerateSessionToken(callsign string) (string, error)
 	sm.tokenStore[token] = callsign
 	log.Printf("[AUTH] Generated session token for %s", callsign)
 
-	// Automatically remove the token after 1 minute to prevent it from living forever.
-	time.AfterFunc(1*time.Minute, func() {
-		sm.tokenMu.Lock()
-		defer sm.tokenMu.Unlock()
-		if _, ok := sm.tokenStore[token]; ok {
-			delete(sm.tokenStore, token)
-			log.Printf("[AUTH] Expired and removed session token for %s", callsign)
-		}
-	})
+	// No auto-expiry. Token will be deleted after successful login (see ValidateAndUseToken).
 
 	return token, nil
 }

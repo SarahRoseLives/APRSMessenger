@@ -26,10 +26,16 @@ class _ChatScreenState extends State<ChatScreen> {
   late WebSocketService _socketService;
   final List<ChatMessage> _messages = [];
 
+  // State to hold the most current callsigns for this conversation
+  late String _currentReplyTo;
+  late String _currentOwnCallsign;
+
   @override
   void initState() {
     super.initState();
     _messages.addAll(widget.contact.messages);
+    _currentReplyTo = widget.contact.callsign;
+    _currentOwnCallsign = widget.contact.ownCallsign!;
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
   }
 
@@ -46,25 +52,27 @@ class _ChatScreenState extends State<ChatScreen> {
       if (msg["aprs_msg"] == true) {
         final from = (msg["from"] as String).toUpperCase();
         final to = (msg["to"] as String).toUpperCase();
-        final contactCallsign = widget.contact.callsign;
 
         final userBaseCallsign = _socketService.callsign!.split('-').first;
         final fromBaseCallsign = from.split('-').first;
-        final toBaseCallsign = to.split('-').first;
+        final fromMe = fromBaseCallsign == userBaseCallsign;
 
-        final isFromMe = fromBaseCallsign == userBaseCallsign;
-        final isToMe = toBaseCallsign == userBaseCallsign;
+        // Determine the other party's base callsign from the incoming message
+        final otherPartyBaseCallsign = (fromMe ? to : from).split('-').first;
 
-        final isFromContact = (from == contactCallsign);
-        final isToContact = (to == contactCallsign);
-
-        if ((isFromContact && isToMe) || (isFromMe && isToContact)) {
-          if (_messages.any((m) => m.text == msg["message"] && m.fromMe == isFromMe)) {
+        // Check if the message belongs to this conversation group
+        if (otherPartyBaseCallsign == widget.contact.groupingId) {
+          if (_messages.any((m) => m.text == msg["message"] && m.fromMe == fromMe)) {
             return; // Avoid duplicates
           }
           setState(() {
+            // If the message is from the other party, update our reply addresses
+            if (!fromMe) {
+              _currentReplyTo = from;
+              _currentOwnCallsign = to;
+            }
             _messages.add(ChatMessage(
-              fromMe: isFromMe,
+              fromMe: fromMe,
               text: msg["message"] ?? "",
               time: _formatTime(msg["created_at"]),
             ));
@@ -82,15 +90,15 @@ class _ChatScreenState extends State<ChatScreen> {
     if (text.isEmpty) return;
 
     _socketService.sendMessage(
-        toCallsign: widget.contact.callsign,
+        toCallsign: _currentReplyTo,
         message: text,
-        fromCallsign: widget.contact.ownCallsign);
+        fromCallsign: _currentOwnCallsign);
 
     final sentMessage = ChatMessage(fromMe: true, text: text, time: _currentTime());
     setState(() {
       _messages.add(sentMessage);
-      widget.contact.messages.add(sentMessage); // Update shared contact object
-      widget.contact.copyWith(lastMessage: text);
+      // The home screen will get the authoritative update via websocket echo.
+      // We just need to update our local UI.
     });
     _chatController.clear();
     _scrollToBottom();
@@ -126,13 +134,12 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
-  // --- BUILD METHOD (UNCHANGED) ---
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.contact.callsign),
+        title: Text(widget.contact.groupingId), // Display the base callsign
         elevation: 1,
       ),
       body: Column(
@@ -154,7 +161,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   child: TextField(
                     controller: _chatController,
                     decoration: InputDecoration(
-                      hintText: "Type a message...",
+                      hintText: "Type a message to $_currentReplyTo...",
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(48),
                         borderSide: BorderSide.none,

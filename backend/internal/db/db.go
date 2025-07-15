@@ -130,18 +130,17 @@ func StoreMessage(to, from, msg string) error {
 	return err
 }
 
-// *** ADD THIS NEW FUNCTION ***
-// ListAllMessagesForUser returns all messages where the user is either the sender or the recipient.
+// ListAllMessagesForUser returns all messages where the user (with any SSID) is either the sender or the recipient.
 func ListAllMessagesForUser(callsign string) ([]*Message, error) {
 	const query = `
 		SELECT id, to_callsign, from_callsign, message, created_at, is_delivered
 		FROM messages
 		WHERE
-			(from_callsign = ?) OR
+			(from_callsign = ? OR from_callsign LIKE ? || '-%') OR
 			(to_callsign = ? OR to_callsign LIKE ? || '-%')
 		ORDER BY created_at ASC
 	`
-	rows, err := db.Query(query, callsign, callsign, callsign)
+	rows, err := db.Query(query, callsign, callsign, callsign, callsign)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +158,6 @@ func ListAllMessagesForUser(callsign string) ([]*Message, error) {
 	}
 	return messages, nil
 }
-// ****************************
 
 // ListUndeliveredMessages returns all undelivered messages for a callsign, ordered oldest first.
 func ListUndeliveredMessages(callsign string) ([]*Message, error) {

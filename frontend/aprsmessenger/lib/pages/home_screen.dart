@@ -128,10 +128,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
         final contactCallsign = fromMe ? to : from;
         final ownCallsignForChat = fromMe ? from : to;
+        final groupingKey = contactCallsign.split('-').first;
 
-        int idx = recents.indexWhere((c) => c.callsign == contactCallsign);
+        int idx = recents.indexWhere((c) => c.groupingId == groupingKey);
         if (idx == -1) {
           recents.add(RecentContact(
+            groupingId: groupingKey,
             callsign: contactCallsign,
             ownCallsign: ownCallsignForChat,
             lastMessage: text,
@@ -150,6 +152,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 time: _displayTime(createdAt),
               ));
           recents[idx] = recents[idx].copyWith(
+            callsign: contactCallsign,
             ownCallsign: ownCallsignForChat,
             lastMessage: text,
             time: _formatTime(createdAt),
