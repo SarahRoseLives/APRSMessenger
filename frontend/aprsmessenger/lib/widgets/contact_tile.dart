@@ -5,12 +5,14 @@ class ContactTile extends StatelessWidget {
   final RecentContact contact;
   final bool selected;
   final VoidCallback onTap;
+  final String displayTime;
 
   const ContactTile({
     super.key,
     required this.contact,
     required this.selected,
     required this.onTap,
+    required this.displayTime,
   });
 
   @override
@@ -71,7 +73,7 @@ class ContactTile extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Text(
-                contact.time,
+                displayTime,
                 style: TextStyle(
                   color: Colors.grey.shade500,
                   fontSize: 12,

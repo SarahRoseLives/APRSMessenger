@@ -1,5 +1,3 @@
-// appui/home_screen.dart
-
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -25,7 +23,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<RecentContact> recents = [];
 
   bool get isAdmin {
-    final callsign = _socketService.callsign ?? '';
+    final callsign = _socketService.callsign?.split('-').first ?? '';
     return ['k8sdr', 'ad8nt'].contains(callsign.toLowerCase());
   }
 
@@ -43,10 +41,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _handleConnectionChange() {
-    if (_socketService.status == SocketStatus.error || _socketService.status == SocketStatus.disconnected) {
+    if (_socketService.status == SocketStatus.error ||
+        _socketService.status == SocketStatus.disconnected) {
       // Navigate back to login if connection is lost
       if (mounted) {
-        // FIX: Navigate back to the LandingPage correctly
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(builder: (context) => const LandingPage()),
           (route) => false,
@@ -55,8 +53,9 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // _onNewMessage and _formatTime methods remain the same as the previous fix...
   void _onNewMessage(dynamic raw) {
+    debugPrint("RAW MESSAGE (appui): $raw");
+
     try {
       final msg = jsonDecode(raw);
       if (msg["aprs_msg"] == true) {
@@ -65,36 +64,58 @@ class _HomeScreenState extends State<HomeScreen> {
         final text = msg["message"] ?? "";
         final createdAt = msg["created_at"];
         final isHistory = msg["history"] == true;
-        final fromMe = from == _socketService.callsign;
-        final contactCallsign = fromMe ? to : from;
 
-        int idx = recents.indexWhere((c) => c.callsign == contactCallsign);
+        final userBaseCallsign = _socketService.callsign!.split('-').first;
+        final fromBaseCallsign = from.split('-').first;
+        final fromMe = fromBaseCallsign == userBaseCallsign;
+
+        final contactCallsign = fromMe ? to : from;
+        final ownCallsignForChat = fromMe ? from : to;
+
+        final newMessage = ChatMessage(
+          fromMe: fromMe,
+          text: text,
+          time: _formatTime(createdAt),
+        );
+
+        final idx = recents.indexWhere((c) => c.callsign == contactCallsign);
 
         if (idx == -1) {
+          // Contact does not exist, create a new one.
           recents.add(RecentContact(
             callsign: contactCallsign,
+            ownCallsign: ownCallsignForChat,
             lastMessage: text,
             time: _formatTime(createdAt),
             unread: !fromMe && !isHistory,
-            messages: [ChatMessage(fromMe: fromMe, text: text, time: _formatTime(createdAt))],
+            messages: [newMessage],
           ));
         } else {
+          // Contact exists, update it immutably.
           final contact = recents[idx];
-          // Prevent adding duplicate history messages
-          if (contact.messages.any((m) => m.text == text && m.time == _formatTime(createdAt))) {
-             return;
-          }
-          contact.messages.add(ChatMessage(fromMe: fromMe, text: text, time: _formatTime(createdAt)));
+
+          final updatedMessages = List<ChatMessage>.from(contact.messages)
+            ..add(newMessage);
+
+          // Sort messages by time to ensure they are in order
+          updatedMessages.sort((a, b) => (a.time ?? "").compareTo(b.time ?? ""));
+
           recents[idx] = contact.copyWith(
+            ownCallsign: ownCallsignForChat,
             lastMessage: text,
             time: _formatTime(createdAt),
             unread: (!fromMe && !isHistory) || contact.unread,
+            messages: updatedMessages, // Pass the new immutable list.
           );
         }
-        setState(() {});
+        // Sort the recents list to bring the most recent conversations to the top
+        recents.sort((a, b) => (b.time).compareTo(a.time));
+        if (mounted) {
+          setState(() {});
+        }
       }
     } catch (e) {
-      // Ignore parse errors
+      debugPrint("Error processing message in appui/home_screen: $e");
     }
   }
 
@@ -102,11 +123,19 @@ class _HomeScreenState extends State<HomeScreen> {
     if (isoTime == null) return "";
     final dt = DateTime.tryParse(isoTime);
     if (dt == null) return "";
-    final now = DateTime.now();
-    if (dt.day == now.day && dt.month == now.month && dt.year == now.year) {
-      return "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
-    }
-    return "${dt.month}/${dt.day}";
+    // Return the full ISO string for accurate sorting. Display formatting is handled in the widget.
+    return isoTime;
+  }
+
+  String _displayTime(String? isoTime) {
+      if (isoTime == null) return "";
+      final dt = DateTime.tryParse(isoTime);
+      if (dt == null) return "";
+      final now = DateTime.now();
+      if (dt.day == now.day && dt.month == now.month && dt.year == now.year) {
+          return "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
+      }
+      return "${dt.year}-${dt.month.toString().padLeft(2,'0')}-${dt.day.toString().padLeft(2,'0')}";
   }
 
 
@@ -114,7 +143,6 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _streamSubscription?.cancel();
     _socketService.removeListener(_handleConnectionChange);
-    // The service itself will be disposed when the provider is removed from the tree
     super.dispose();
   }
 
@@ -131,7 +159,9 @@ class _HomeScreenState extends State<HomeScreen> {
               icon: const Icon(Icons.admin_panel_settings),
               tooltip: "Admin Panel",
               onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => AdminPanelScreen(callsign: socketService.callsign!)),
+                MaterialPageRoute(
+                    builder: (_) => AdminPanelScreen(
+                        callsign: socketService.callsign!)),
               ),
             ),
           Padding(
@@ -141,24 +171,23 @@ class _HomeScreenState extends State<HomeScreen> {
               tooltip: "Logout",
               onPressed: () {
                 socketService.disconnect();
-                // FIX: The listener will now handle navigation correctly,
-                // but we can be explicit here for immediate feedback.
+                // The listener will handle navigation, but this is immediate.
                 Navigator.of(context).pushAndRemoveUntil(
-                    MaterialPageRoute(builder: (context) => const LandingPage()),
-                    (route) => false
-                );
+                    MaterialPageRoute(
+                        builder: (context) => const LandingPage()),
+                    (route) => false);
               },
             ),
           ),
         ],
       ),
-      // The body of the scaffold remains the same as the previous fix...
       body: ListView.builder(
         itemCount: recents.length,
         itemBuilder: (context, i) {
           final contact = recents[i];
           return ContactTile(
             contact: contact,
+            displayTime: _displayTime(contact.time),
             selected: false,
             onTap: () async {
               setState(() => recents[i] = contact.copyWith(unread: false));

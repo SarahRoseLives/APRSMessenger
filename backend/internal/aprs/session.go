@@ -1,14 +1,17 @@
 package aprs
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
-
 	"aprsmessenger-gateway/internal/db"
+
+	"github.com/gorilla/websocket"
 )
 
 // Session represents an in-memory structure for a user's websocket and message delivery
@@ -38,7 +41,8 @@ func (s *Session) AttachWebSocket(ws *websocket.Conn) {
 			if err := db.StoreMessage(to, from, msg); err != nil {
 				log.Printf("[APRS] Failed to store message for %s: %v", to, err)
 			}
-			s.broadcastWSMessage(from, to, msg)
+			// Broadcast incoming messages to all clients, with no exclusions.
+			s.BroadcastMessage(from, to, msg, nil)
 		})
 	}
 	s.wsClients[ws] = struct{}{}
@@ -46,7 +50,6 @@ func (s *Session) AttachWebSocket(ws *websocket.Conn) {
 	log.Printf("[APRS] WebSocket attached to session %s", s.Callsign)
 
 	go s.keepAliveWS(ws)
-	// *** REPLACE THE GOROUTINE CALL ***
 	go s.deliverHistory(ws)
 }
 
@@ -81,25 +84,29 @@ func (s *Session) keepAliveWS(ws *websocket.Conn) {
 	}
 }
 
-// broadcastWSMessage sends a received APRS message to all attached websockets.
-func (s *Session) broadcastWSMessage(from, to, msg string) {
+// BroadcastMessage sends a message to all attached websockets, optionally excluding one.
+func (s *Session) BroadcastMessage(from, to, msg string, exclude *websocket.Conn) {
 	s.wsMu.Lock()
 	defer s.wsMu.Unlock()
+
 	if len(s.wsClients) == 0 {
 		return
 	}
 	resp := map[string]interface{}{
-		"aprs_msg": true,
-		"from":     from,
-		"to":       to,
-		"message":  msg,
+		"aprs_msg":   true,
+		"from":       from,
+		"to":         to,
+		"message":    msg,
+		"created_at": time.Now().UTC().Format(time.RFC3339),
 	}
+
 	for ws := range s.wsClients {
-		_ = ws.WriteJSON(resp)
+		if ws != exclude {
+			_ = ws.WriteJSON(resp)
+		}
 	}
 }
 
-// *** REPLACE deliverUndeliveredHistory with this new deliverHistory function ***
 // deliverHistory sends the full conversation history to the websocket and marks
 // any new incoming messages as delivered.
 func (s *Session) deliverHistory(ws *websocket.Conn) {
@@ -145,7 +152,9 @@ func (s *Session) deliverHistory(ws *websocket.Conn) {
 // SessionsManager manages all in-memory user sessions.
 type SessionsManager struct {
 	sync.Mutex
-	sessions map[string]*Session
+	sessions   map[string]*Session
+	tokenMu    sync.Mutex
+	tokenStore map[string]string // token -> callsign
 }
 
 var (
@@ -163,7 +172,8 @@ func GetSessionsManager() *SessionsManager {
 
 func NewSessionsManager() *SessionsManager {
 	return &SessionsManager{
-		sessions: make(map[string]*Session),
+		sessions:   make(map[string]*Session),
+		tokenStore: make(map[string]string),
 	}
 }
 
@@ -184,4 +194,49 @@ func (sm *SessionsManager) GetSession(callsign string) *Session {
 	sm.Lock()
 	defer sm.Unlock()
 	return sm.sessions[callsign]
+}
+
+// GenerateSessionToken creates a new, random token for a user, valid for a short time.
+func (sm *SessionsManager) GenerateSessionToken(callsign string) (string, error) {
+	b := make([]byte, 16) // 128 bits of randomness
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	token := hex.EncodeToString(b)
+
+	sm.tokenMu.Lock()
+	defer sm.tokenMu.Unlock()
+
+	sm.tokenStore[token] = callsign
+	log.Printf("[AUTH] Generated session token for %s", callsign)
+
+	// Automatically remove the token after 1 minute to prevent it from living forever.
+	time.AfterFunc(1*time.Minute, func() {
+		sm.tokenMu.Lock()
+		defer sm.tokenMu.Unlock()
+		if _, ok := sm.tokenStore[token]; ok {
+			delete(sm.tokenStore, token)
+			log.Printf("[AUTH] Expired and removed session token for %s", callsign)
+		}
+	})
+
+	return token, nil
+}
+
+// ValidateAndUseToken checks if a token is valid, returns the associated callsign,
+// and immediately deletes the token to make it single-use.
+func (sm *SessionsManager) ValidateAndUseToken(token string) (string, error) {
+	sm.tokenMu.Lock()
+	defer sm.tokenMu.Unlock()
+
+	callsign, ok := sm.tokenStore[token]
+	if !ok {
+		return "", fmt.Errorf("invalid or expired token")
+	}
+
+	// Token is single-use, so delete it immediately.
+	delete(sm.tokenStore, token)
+	log.Printf("[AUTH] Validated and consumed session token for %s", callsign)
+
+	return callsign, nil
 }

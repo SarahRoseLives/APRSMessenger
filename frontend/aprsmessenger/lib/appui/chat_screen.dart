@@ -1,5 +1,3 @@
-// appui/chat_screen.dart
-
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -48,16 +46,25 @@ class _ChatScreenState extends State<ChatScreen> {
       if (msg["aprs_msg"] == true) {
         final from = (msg["from"] as String).toUpperCase();
         final to = (msg["to"] as String).toUpperCase();
-        final currentUser = _socketService.callsign!;
         final contactCallsign = widget.contact.callsign;
 
-        if ((from == contactCallsign && to == currentUser) || (from == currentUser && to == contactCallsign)) {
-          if (_messages.any((m) => m.text == msg["message"] && m.fromMe == (from == currentUser))) {
+        final userBaseCallsign = _socketService.callsign!.split('-').first;
+        final fromBaseCallsign = from.split('-').first;
+        final toBaseCallsign = to.split('-').first;
+
+        final isFromMe = fromBaseCallsign == userBaseCallsign;
+        final isToMe = toBaseCallsign == userBaseCallsign;
+
+        final isFromContact = (from == contactCallsign);
+        final isToContact = (to == contactCallsign);
+
+        if ((isFromContact && isToMe) || (isFromMe && isToContact)) {
+          if (_messages.any((m) => m.text == msg["message"] && m.fromMe == isFromMe)) {
             return; // Avoid duplicates
           }
           setState(() {
             _messages.add(ChatMessage(
-              fromMe: from == currentUser,
+              fromMe: isFromMe,
               text: msg["message"] ?? "",
               time: _formatTime(msg["created_at"]),
             ));
@@ -74,7 +81,10 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _chatController.text.trim();
     if (text.isEmpty) return;
 
-    _socketService.sendMessage(toCallsign: widget.contact.callsign, message: text);
+    _socketService.sendMessage(
+        toCallsign: widget.contact.callsign,
+        message: text,
+        fromCallsign: widget.contact.ownCallsign);
 
     final sentMessage = ChatMessage(fromMe: true, text: text, time: _currentTime());
     setState(() {

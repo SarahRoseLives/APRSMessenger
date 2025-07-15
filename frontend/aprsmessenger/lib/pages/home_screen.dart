@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../models/contact.dart';
 import '../models/chat_message.dart';
 import '../services/websocket_service.dart';
@@ -28,7 +29,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _loginError;
 
   bool get isAdmin {
-    final callsign = _socketService.callsign ?? '';
+    final callsign = _socketService.callsign?.split('-').first ?? '';
     return ['k8sdr', 'ad8nt'].contains(callsign.toLowerCase());
   }
 
@@ -49,6 +50,50 @@ class _HomeScreenState extends State<HomeScreen> {
         Navigator.of(context).popUntil((route) => route.isFirst);
       }
     }
+  }
+
+  void _showQrCode() {
+    final token = _socketService.sessionToken;
+    if (token == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Session token not available.")),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text("Login on Mobile App"),
+          content: SizedBox(
+            width: 250,
+            height: 250,
+            child: Center(
+              child: QrImageView(
+                data: token,
+                version: QrVersions.auto,
+                size: 220.0,
+                gapless: false,
+                eyeStyle: QrEyeStyle(
+                  eyeShape: QrEyeShape.square,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                dataModuleStyle: QrDataModuleStyle(
+                  dataModuleShape: QrDataModuleShape.square,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text("Close"),
+            ),
+          ],
+        ),
+    );
   }
 
   void _onNewMessage(dynamic raw) {
@@ -74,29 +119,38 @@ class _HomeScreenState extends State<HomeScreen> {
         final isHistory = msg["history"] == true;
         final text = msg["message"] ?? "";
         final createdAt = msg["created_at"];
-        final fromMe = from == (_socketService.callsign ?? '').toUpperCase();
+
+        final userBaseCallsign =
+            (_socketService.callsign ?? '').toUpperCase().split('-').first;
+        if (userBaseCallsign.isEmpty) return;
+        final fromBaseCallsign = from.split('-').first;
+        final fromMe = fromBaseCallsign == userBaseCallsign;
+
         final contactCallsign = fromMe ? to : from;
+        final ownCallsignForChat = fromMe ? from : to;
 
         int idx = recents.indexWhere((c) => c.callsign == contactCallsign);
         if (idx == -1) {
           recents.add(RecentContact(
             callsign: contactCallsign,
+            ownCallsign: ownCallsignForChat,
             lastMessage: text,
             time: _formatTime(createdAt),
-            unread: !fromMe && !isHistory,
             messages: [
               ChatMessage(
-                  fromMe: fromMe, text: text, time: _formatTime(createdAt)),
+                  fromMe: fromMe, text: text, time: _displayTime(createdAt)),
             ],
+            unread: !fromMe && !isHistory,
           ));
           idx = recents.length - 1;
         } else {
           recents[idx].messages.add(ChatMessage(
-            fromMe: fromMe,
-            text: text,
-            time: _formatTime(createdAt),
-          ));
+                fromMe: fromMe,
+                text: text,
+                time: _displayTime(createdAt),
+              ));
           recents[idx] = recents[idx].copyWith(
+            ownCallsign: ownCallsignForChat,
             lastMessage: text,
             time: _formatTime(createdAt),
             unread: (!fromMe && !isHistory) || recents[idx].unread,
@@ -106,6 +160,10 @@ class _HomeScreenState extends State<HomeScreen> {
         if (selectedIndex != idx && !fromMe && !isHistory) {
           recents[idx] = recents[idx].copyWith(unread: true);
         }
+
+        // Sort by time
+        recents.sort((a, b) => b.time.compareTo(a.time));
+
         setState(() {});
       }
     } catch (e) {
@@ -125,21 +183,26 @@ class _HomeScreenState extends State<HomeScreen> {
     final text = _chatController.text.trim();
     if (text.isEmpty || selectedIndex == null) return;
     final contact = recents[selectedIndex!];
-    // The backend expects "to_callsign" as the key.
-    _socketService.sendMessage(toCallsign: contact.callsign, message: text);
+
+    _socketService.sendMessage(
+        toCallsign: contact.callsign,
+        message: text,
+        fromCallsign: contact.ownCallsign);
     setState(() {
       recents[selectedIndex!].messages.add(
-        ChatMessage(
-          fromMe: true,
-          text: text,
-          time: _currentTime(),
-        ),
-      );
+            ChatMessage(
+              fromMe: true,
+              text: text,
+              time: _currentTime(),
+            ),
+          );
       recents[selectedIndex!] = recents[selectedIndex!].copyWith(
         lastMessage: text,
-        time: "Now",
+        time: DateTime.now().toIso8601String(),
         unread: false,
       );
+      // Sort by time
+      recents.sort((a, b) => b.time.compareTo(a.time));
       _chatController.clear();
     });
   }
@@ -150,10 +213,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _formatTime(String? isoTime) {
+    if (isoTime == null) return DateTime.now().toIso8601String();
+    return isoTime;
+  }
+
+  String _displayTime(String? isoTime) {
     if (isoTime == null) return _currentTime();
     try {
-      final dt = DateTime.tryParse(isoTime);
-      if (dt == null) return _currentTime();
+      final dt = DateTime.parse(isoTime);
       final now = DateTime.now();
       if (dt.day == now.day &&
           dt.month == now.month &&
@@ -252,37 +319,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             Padding(
-              padding: const EdgeInsets.only(right: 24),
-              child: Stack(
-                children: [
-                  IconButton(
-                    icon: Icon(Icons.notifications_none_outlined,
-                        color: Colors.teal.shade700),
-                    onPressed: () {},
-                  ),
-                  if (recents.any((c) => c.unread))
-                    Positioned(
-                      right: 6,
-                      top: 10,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.redAccent,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        constraints:
-                            const BoxConstraints(minWidth: 16, minHeight: 16),
-                        child: Center(
-                          child: Text(
-                            '${recents.where((c) => c.unread).length}',
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
+              padding: const EdgeInsets.only(right: 24.0),
+              child: IconButton(
+                tooltip: "Login on Mobile",
+                icon: Icon(Icons.qr_code,
+                    color: Colors.teal.shade700, size: 28),
+                onPressed: _showQrCode,
               ),
             ),
           ],
@@ -340,6 +382,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             final selected = selectedIndex == i;
                             return ContactTile(
                               contact: c,
+                              displayTime: _displayTime(c.time),
                               selected: selected,
                               onTap: () {
                                 setState(() {
@@ -423,9 +466,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                       foregroundColor:
                                           theme.colorScheme.primary,
                                       child: Text(
-                                          recents[selectedIndex!]
-                                              .callsign
-                                              .substring(0, 1),
+                                        recents[selectedIndex!]
+                                            .callsign
+                                            .substring(0, 1),
                                       ),
                                     ),
                                     const SizedBox(width: 12),
@@ -458,8 +501,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                   itemCount:
                                       recents[selectedIndex!].messages.length,
                                   itemBuilder: (context, i) {
-                                    final msg = recents[selectedIndex!]
-                                        .messages[i];
+                                    final msg =
+                                        recents[selectedIndex!].messages[i];
                                     return ChatBubble(message: msg);
                                   },
                                 ),

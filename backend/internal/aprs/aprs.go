@@ -88,3 +88,21 @@ func ParseAPRSMessage(line string) (from, to, msg string, ok bool) {
 	}
 	return "", "", "", false
 }
+
+// GeneratePasscode calculates the numeric APRS-IS passcode for a given callsign.
+func GeneratePasscode(callsign string) uint16 {
+	// The passcode algorithm only uses the base callsign (no SSID) and must be uppercase.
+	baseCallsign := strings.ToUpper(strings.Split(callsign, "-")[0])
+	hash := uint16(0x73e2) // Initialize with a prime seed
+	chars := []byte(baseCallsign)
+
+	for i := 0; i < len(chars); i += 2 {
+		hash ^= uint16(chars[i]) << 8
+		if i+1 < len(chars) {
+			hash ^= uint16(chars[i+1])
+		}
+	}
+
+	// The final hash is the lower 15 bits.
+	return hash & 0x7fff
+}

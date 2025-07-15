@@ -3,15 +3,18 @@ package aprs
 import (
 	"fmt"
 	"log"
-	"net"
 	"strings"
 	"sync"
 	"time"
+
+	"aprsmessenger-gateway/internal/db"
 )
+
+import aprsis "github.com/dustin/go-aprs/aprsis"
 
 // APRSManager manages APRS-IS connections and message callbacks.
 type APRSManager struct {
-	conn      net.Conn // Use the standard library's net.Conn
+	conn      *aprsis.APRSIS
 	connMu    sync.RWMutex
 	stopCh    chan struct{}
 	callbacks map[string]func(from, to, msg string)
@@ -19,9 +22,38 @@ type APRSManager struct {
 	setMu     sync.RWMutex
 }
 
-// ... (GetAPRSManager, NewAPRSManager, and Start are unchanged) ...
+var (
+	globalAPRSManager     *APRSManager
+	globalAPRSManagerOnce = false
+)
 
-// SendMessage formats and sends an APRS message on behalf of a user.
+// GetAPRSManager returns the singleton APRSManager.
+func GetAPRSManager() *APRSManager {
+	if !globalAPRSManagerOnce {
+		globalAPRSManager = NewAPRSManager()
+		globalAPRSManagerOnce = true
+	}
+	return globalAPRSManager
+}
+
+// NewAPRSManager creates a new APRSManager instance.
+func NewAPRSManager() *APRSManager {
+	return &APRSManager{
+		callbacks: make(map[string]func(from, to, msg string)),
+		users:     make(map[string]struct{}),
+		stopCh:    make(chan struct{}),
+	}
+}
+
+// Start starts the APRSManager's background routines.
+func (am *APRSManager) Start() {
+	go am.run()
+}
+
+// SendMessage formats and sends an APRS message using the manager's connection.
+// fromCallsign: the sending user's callsign (e.g. "OURUSER")
+// recipientCallsign: the recipient's callsign (e.g. "RXUSER")
+// message: the message text
 func (am *APRSManager) SendMessage(fromCallsign, recipientCallsign, message string) error {
 	// APRS message payload is limited to 67 characters
 	if len(message) > 67 {
@@ -31,10 +63,12 @@ func (am *APRSManager) SendMessage(fromCallsign, recipientCallsign, message stri
 	// Recipient must be 9 chars, space-padded on the right.
 	paddedRecipient := fmt.Sprintf("%-9s", strings.ToUpper(recipientCallsign))
 
-	// *** THIS IS THE FIX ***
-	// Format the packet so the user is the source, and the gateway is in the path.
-	// Format: USER>APRS,TCPIP,GATEWAY*::RECIPIENT  :message text
-	packet := fmt.Sprintf("%s>APRS,TCPIP,K8SDR-10*::%s:%s\r\n", fromCallsign, paddedRecipient, message)
+	// Construct path: always use our gateway as the last hop
+	// e.g., OURUSER>APRS,K8SDR*,qAC,K8SDR-10::RXUSER   :message
+	const viaPath = "APRS,K8SDR*,qAC,K8SDR-10"
+
+	// Format the APRS message packet
+	packet := fmt.Sprintf("%s>%s::%s:%s", fromCallsign, viaPath, paddedRecipient, message)
 
 	am.connMu.RLock()
 	defer am.connMu.RUnlock()
@@ -43,45 +77,24 @@ func (am *APRSManager) SendMessage(fromCallsign, recipientCallsign, message stri
 		return fmt.Errorf("APRS connection is not active")
 	}
 
-	log.Printf("[APRS SEND] Sending: %s", strings.TrimSpace(packet))
-	_, err := am.conn.Write([]byte(packet))
-	return err
+	log.Printf("[APRS SEND] Sending: %s", packet)
+	return am.conn.SendRawPacket("%s", packet)
 }
 
-// ... (The rest of the file is unchanged) ...
-// (Full file content is provided below for completeness)
-
-var (
-	globalAPRSManager     *APRSManager
-	globalAPRSManagerOnce = false
-)
-
-func GetAPRSManager() *APRSManager {
-	if !globalAPRSManagerOnce {
-		globalAPRSManager = NewAPRSManager()
-		globalAPRSManagerOnce = true
-	}
-	return globalAPRSManager
-}
-
-func NewAPRSManager() *APRSManager {
-	return &APRSManager{
-		callbacks: make(map[string]func(from, to, msg string)),
-		users:     make(map[string]struct{}),
-		stopCh:    make(chan struct{}),
-	}
-}
-
-func (am *APRSManager) Start() {
-	go am.run()
-}
-
+// run connects to APRS-IS and processes incoming packets.
 func (am *APRSManager) run() {
 	for {
 		log.Printf("[APRS] Connecting to APRS-IS as K8SDR-10")
-		conn, linesCh, err := ConnectAndLogin("rotate.aprs.net:10152", "K8SDR-10", "14750", "b/K8SDR*") // Listen for messages to any K8SDR-xx user
+		conn, err := aprsis.Dial("tcp", "rotate.aprs.net:10152")
 		if err != nil {
-			log.Printf("[APRS] Connect/Login failed: %v. Retrying in 10s.", err)
+			log.Printf("[APRS] Connect failed for K8SDR-10: %v. Retrying in 10s.", err)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+
+		if err := conn.Auth("K8SDR-10", "14750", ""); err != nil {
+			log.Printf("[APRS] Auth failed for K8SDR-10: %v. Retrying in 10s.", err)
+			conn.Close()
 			time.Sleep(10 * time.Second)
 			continue
 		}
@@ -90,25 +103,44 @@ func (am *APRSManager) run() {
 		am.conn = conn
 		am.connMu.Unlock()
 
-		log.Printf("[APRS] Connected and authenticated as K8SDR-10, listening for messages.")
+		log.Printf("[APRS] Connected and authenticated as K8SDR-10, listening for messages to active users")
 
-		for line := range linesCh {
-			if strings.HasPrefix(line, "#") {
-				continue
+		for {
+			frame, err := conn.Next()
+			if err != nil {
+				log.Printf("[APRS] Error from APRS-IS: %v. Reconnecting in 10s.", err)
+				break
 			}
+			line := frame.String()
 
+			// Only process user-to-user messages and deliver via session broadcast
 			msg, perr := ParseMessagePacket(line)
 			if perr == nil && msg.IsUserMessage() {
+				// Get base callsign for addressee (strip SSID)
 				baseDest := baseCallsign(toUpperNoSpace(msg.Addressee))
-				am.setMu.RLock()
-				cb, ok := am.callbacks[baseDest]
-				am.setMu.RUnlock()
 
-				if ok {
-					log.Printf("[APRS DISPATCH] %s -> %s: %s", msg.Source, msg.Addressee, msg.MessageText)
-					go cb(msg.Source, msg.Addressee, msg.MessageText)
+				// Get all user callsigns (base and full) from DB
+				userSet, err := db.UserCallsignSet()
+				if err != nil {
+					log.Printf("[APRS] Unable to load user callsign set: %v", err)
+					continue
+				}
+				// Does the intended recipient match a user (by base or full callsign)?
+				if _, ok := userSet[baseDest]; ok {
+					// Store message to history
+					if err := db.StoreMessage(msg.Addressee, msg.Source, msg.MessageText); err != nil {
+						log.Printf("[APRS] Failed to store message for %s: %v", msg.Addressee, err)
+					}
+					// Push to user if online
+					session := GetSessionsManager().GetSession(baseDest)
+					if session != nil {
+						// Only log if we are actually forwarding to a client (online)
+						log.Printf("[APRS RAW] %s", line)
+						session.BroadcastMessage(msg.Source, msg.Addressee, msg.MessageText, nil)
+					}
 				}
 			}
+			// Removed legacy callback delivery to avoid double messages
 		}
 
 		log.Printf("[APRS] Disconnected. Reconnecting in 10s.")
@@ -122,6 +154,7 @@ func (am *APRSManager) run() {
 	}
 }
 
+// RegisterUser registers a callback for a user's callsign.
 func (am *APRSManager) RegisterUser(callsign string, cb func(from, to, msg string)) {
 	am.setMu.Lock()
 	defer am.setMu.Unlock()
@@ -131,6 +164,7 @@ func (am *APRSManager) RegisterUser(callsign string, cb func(from, to, msg strin
 	log.Printf("[APRS Manager] Registered callback for %s", cleanCallsign)
 }
 
+// UnregisterUser removes a user's callback registration.
 func (am *APRSManager) UnregisterUser(callsign string) {
 	am.setMu.Lock()
 	defer am.setMu.Unlock()
@@ -140,6 +174,7 @@ func (am *APRSManager) UnregisterUser(callsign string) {
 	log.Printf("[APRS Manager] Unregistered callback for %s", cleanCallsign)
 }
 
+// baseCallsign strips SSID (-10 etc) from a callsign.
 func baseCallsign(cs string) string {
 	if idx := strings.Index(cs, "-"); idx != -1 {
 		return cs[:idx]
@@ -147,6 +182,7 @@ func baseCallsign(cs string) string {
 	return cs
 }
 
+// toUpperNoSpace returns uppercased callsign, trimmed.
 func toUpperNoSpace(cs string) string {
 	return strings.ToUpper(strings.TrimSpace(cs))
 }

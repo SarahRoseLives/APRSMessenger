@@ -8,70 +8,51 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gorilla/websocket"
-	"golang.org/x/crypto/bcrypt"
-
 	"aprsmessenger-gateway/internal/aprs"
 	"aprsmessenger-gateway/internal/db"
 	"aprsmessenger-gateway/internal/models"
+
+	"github.com/gorilla/websocket"
+	"golang.org/x/crypto/bcrypt"
 )
-
-// ... (Code is identical until handleSendMessage) ...
-
-func handleSendMessage(conn *websocket.Conn, fromCallsign string, req WSRequest) {
-	toCallsign := strings.ToUpper(strings.TrimSpace(req.ToCallsign))
-	if toCallsign == "" {
-		sendResponse(conn, false, "Invalid recipient callsign")
-		return
-	}
-	if req.Message == "" {
-		sendResponse(conn, false, "Message cannot be empty")
-		return
-	}
-
-	// *** THIS IS THE FIX ***
-	// The call now correctly passes all three required arguments:
-	// fromCallsign (string), toCallsign (string), and req.Message (string).
-	log.Printf("[WS] Queuing message from %s to %s", fromCallsign, toCallsign)
-	err := aprs.GetAPRSManager().SendMessage(fromCallsign, toCallsign, req.Message)
-
-	if err != nil {
-		sendResponse(conn, false, "Failed to send message: "+err.Error())
-		log.Printf("[APRS] Error sending message from %s: %v", fromCallsign, err)
-	} else {
-		// *** ADD THIS BLOCK ***
-		// Store the sent message in the database for history.
-		// The `to_callsign` is the recipient, and the `from_callsign` is our user.
-		if storeErr := db.StoreMessage(toCallsign, fromCallsign, req.Message); storeErr != nil {
-			// Log the error, but don't fail the operation since the message was sent.
-			log.Printf("[DB] Failed to store sent message for history from %s: %v", fromCallsign, storeErr)
-		}
-		// **********************
-		sendResponse(conn, true, "")
-	}
-}
-
-// ... (The rest of the file is unchanged) ...
-// (Full file content is provided below for completeness)
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+// WSRequest defines the structure for all incoming websocket actions.
 type WSRequest struct {
-	Action     string `json:"action"`
-	Callsign   string `json:"callsign,omitempty"`
-	Password   string `json:"password,omitempty"`
-	Passcode   string `json:"passcode,omitempty"`
-	ToCallsign string `json:"to_callsign,omitempty"`
-	Message    string `json:"message,omitempty"`
+	Action       string `json:"action"`
+	Callsign     string `json:"callsign,omitempty"`
+	Password     string `json:"password,omitempty"`
+	Passcode     string `json:"passcode,omitempty"`
+	Token        string `json:"token,omitempty"` // For QR code login
+	ToCallsign   string `json:"to_callsign,omitempty"`
+	Message      string `json:"message,omitempty"`
+	FromCallsign string `json:"from_callsign,omitempty"`
 }
 
-type WSResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
+// WSResponse is a flexible map for sending responses back to the client.
+type WSResponse map[string]interface{}
+
+// sendSuccessResponse sends a structured success message to the client.
+func sendSuccessResponse(conn *websocket.Conn, data WSResponse) {
+	response := WSResponse{"success": true}
+	if data != nil {
+		for k, v := range data {
+			response[k] = v
+		}
+	}
+	_ = conn.WriteJSON(response)
 }
 
+// sendErrorResponse sends a structured error message to the client.
+func sendErrorResponse(conn *websocket.Conn, errMsg string) {
+	response := WSResponse{"success": false, "error": errMsg}
+	_ = conn.WriteJSON(response)
+}
+
+// HandleWebSocket is the main entry point for websocket connections.
 func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -85,13 +66,15 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			log.Println("WebSocket read failed during auth:", err)
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNoStatusReceived) {
+				log.Printf("WebSocket unexpected close during auth: %v", err)
+			}
 			return
 		}
 
 		var req WSRequest
 		if err := json.Unmarshal(msg, &req); err != nil {
-			sendResponse(conn, false, "Invalid JSON")
+			sendErrorResponse(conn, "Invalid JSON")
 			continue
 		}
 
@@ -99,90 +82,164 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		case "create_account":
 			handleCreateAccount(conn, req)
 		case "login":
-			user, err = attemptLogin(req)
+			var token string
+			user, token, err = attemptLogin(req)
 			if err != nil {
-				sendResponse(conn, false, err.Error())
+				sendErrorResponse(conn, err.Error())
 				log.Printf("Login failed for %s: %v", req.Callsign, err)
 			} else {
-				sendResponse(conn, true, "")
+				sendSuccessResponse(conn, WSResponse{"session_token": token})
 				log.Printf("Login success: %s", user.Callsign)
 				goto authenticated
 			}
+		case "login_with_token":
+			user, err = handleTokenLogin(req)
+			if err != nil {
+				sendErrorResponse(conn, err.Error())
+				log.Printf("Token login failed: %v", err)
+			} else {
+				sendSuccessResponse(conn, WSResponse{"callsign": user.Callsign})
+				log.Printf("Token login success for %s", user.Callsign)
+				goto authenticated
+			}
 		default:
-			sendResponse(conn, false, "Authentication required. Please 'login' or 'create_account'.")
+			sendErrorResponse(conn, "Authentication required. Please 'login' or 'create_account'.")
 		}
 	}
 
 authenticated:
-	session := aprs.GetSessionsManager().EnsureSession(user.Callsign)
+	// Once authenticated, attach the websocket to the user's session.
+	baseUserCallsign := getBaseCallsign(user.Callsign)
+	session := aprs.GetSessionsManager().EnsureSession(baseUserCallsign)
 	session.AttachWebSocket(conn)
 	defer session.DetachWebSocket(conn)
 
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			log.Printf("WebSocket read failed for user %s: %v", user.Callsign, err)
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("WebSocket unexpected close for user %s: %v", user.Callsign, err)
+			}
 			break
 		}
 
 		var req WSRequest
 		if err := json.Unmarshal(msg, &req); err != nil {
-			sendResponse(conn, false, "Invalid JSON")
+			sendErrorResponse(conn, "Invalid JSON")
 			continue
 		}
 
 		switch req.Action {
 		case "send_message":
-			handleSendMessage(conn, user.Callsign, req)
+			fromCallsign := user.Callsign
+			if req.FromCallsign != "" {
+				fromCallsign = req.FromCallsign
+			}
+			handleSendMessage(conn, fromCallsign, baseUserCallsign, req)
 		default:
-			sendResponse(conn, false, "Unknown action.")
+			sendErrorResponse(conn, "Unknown action.")
 		}
 	}
 }
 
-func attemptLogin(req WSRequest) (*models.User, error) {
+// handleSendMessage sends the message to APRS-IS and broadcasts it to other connected clients.
+func handleSendMessage(conn *websocket.Conn, fromCallsign, baseUserCallsign string, req WSRequest) {
+	toCallsign := strings.ToUpper(strings.TrimSpace(req.ToCallsign))
+	if toCallsign == "" {
+		sendErrorResponse(conn, "Invalid recipient callsign")
+		return
+	}
+	if req.Message == "" {
+		sendErrorResponse(conn, "Message cannot be empty")
+		return
+	}
+
+	log.Printf("[WS] Queuing message from %s to %s", fromCallsign, toCallsign)
+	// Pass (fromCallsign, toCallsign, req.Message) to SendMessage.
+	err := aprs.GetAPRSManager().SendMessage(fromCallsign, toCallsign, req.Message)
+
+	if err != nil {
+		sendErrorResponse(conn, "Failed to send message: "+err.Error())
+		log.Printf("[APRS] Error sending message from %s: %v", fromCallsign, err)
+	} else {
+		// Store the sent message for history.
+		if storeErr := db.StoreMessage(toCallsign, fromCallsign, req.Message); storeErr != nil {
+			log.Printf("[DB] Failed to store sent message for history from %s: %v", fromCallsign, storeErr)
+		}
+
+		// Broadcast the sent message to the user's other clients for synchronization.
+		if session := aprs.GetSessionsManager().GetSession(baseUserCallsign); session != nil {
+			session.BroadcastMessage(fromCallsign, toCallsign, req.Message, conn)
+		}
+	}
+}
+
+// handleTokenLogin validates a session token and returns the associated user.
+func handleTokenLogin(req WSRequest) (*models.User, error) {
+	if req.Token == "" {
+		return nil, fmt.Errorf("token is missing")
+	}
+
+	callsign, err := aprs.GetSessionsManager().ValidateAndUseToken(req.Token)
+	if err != nil {
+		return nil, err // e.g., "invalid or expired token"
+	}
+
+	user, err := db.GetUserByCallsign(callsign)
+	if err != nil || user == nil {
+		return nil, fmt.Errorf("server error: could not find user for valid token")
+	}
+
+	return user, nil
+}
+
+// attemptLogin validates user credentials and returns the user model and a new session token on success.
+func attemptLogin(req WSRequest) (*models.User, string, error) {
 	callsign := cleanCallsign(req.Callsign)
 	if !validCallsign(callsign) {
-		return nil, fmt.Errorf("invalid callsign")
+		return nil, "", fmt.Errorf("invalid callsign format")
 	}
 	user, err := db.GetUserByCallsign(callsign)
 	if err != nil || user == nil {
-		return nil, fmt.Errorf("callsign not found")
+		return nil, "", fmt.Errorf("callsign not found or server error")
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
-		return nil, fmt.Errorf("incorrect password")
+		return nil, "", fmt.Errorf("incorrect password")
 	}
-	return user, nil
+
+	// Login successful, generate a single-use session token for QR code login.
+	token, err := aprs.GetSessionsManager().GenerateSessionToken(user.Callsign)
+	if err != nil {
+		log.Printf("[AUTH] Failed to generate session token for %s: %v", user.Callsign, err)
+		return nil, "", fmt.Errorf("could not create session token")
+	}
+
+	return user, token, nil
 }
 
 func handleCreateAccount(conn *websocket.Conn, req WSRequest) {
 	callsign := cleanCallsign(req.Callsign)
 	if !validCallsign(callsign) {
-		sendResponse(conn, false, "Invalid callsign")
-		log.Printf("Invalid callsign during registration: %s", callsign)
+		sendErrorResponse(conn, "Invalid callsign format")
 		return
 	}
 	if req.Password == "" || req.Passcode == "" {
-		sendResponse(conn, false, "Missing password or passcode")
-		log.Printf("Missing password or passcode for callsign: %s", callsign)
+		sendErrorResponse(conn, "Missing password or passcode")
 		return
 	}
-	expectedPasscode := aprsPass(callsign)
-	if req.Passcode != expectedPasscode {
-		sendResponse(conn, false, "Incorrect passcode for callsign")
-		log.Printf("Incorrect passcode for callsign: %s", callsign)
+	expectedPasscode := aprs.GeneratePasscode(getBaseCallsign(callsign))
+	if req.Passcode != fmt.Sprintf("%d", expectedPasscode) {
+		sendErrorResponse(conn, "Incorrect APRS-IS passcode for callsign")
 		return
 	}
 	user, _ := db.GetUserByCallsign(callsign)
 	if user != nil {
-		sendResponse(conn, false, "Callsign already registered")
-		log.Printf("Attempt to re-register existing callsign: %s", callsign)
+		sendErrorResponse(conn, "Callsign already registered")
 		return
 	}
 	pwHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		sendResponse(conn, false, "Password encryption failed")
-		log.Printf("Password encryption failed for callsign: %s", callsign)
+		sendErrorResponse(conn, "Server error: could not hash password")
 		return
 	}
 	newUser := &models.User{
@@ -191,47 +248,26 @@ func handleCreateAccount(conn *websocket.Conn, req WSRequest) {
 		Passcode:     req.Passcode,
 	}
 	if err := db.CreateUser(newUser); err != nil {
-		sendResponse(conn, false, "Failed to create user")
-		log.Printf("Failed to create user: %s", err)
+		sendErrorResponse(conn, "Server error: could not create user")
 		return
 	}
-	sendResponse(conn, true, "")
+	sendSuccessResponse(conn, nil)
 	log.Printf("Account created for callsign: %s", callsign)
 }
 
-func sendResponse(conn *websocket.Conn, success bool, errMsg string) {
-	resp := WSResponse{Success: success}
-	if !success {
-		resp.Error = errMsg
-	}
-	_ = conn.WriteJSON(resp)
+func cleanCallsign(callsign string) string {
+	return strings.ToUpper(strings.TrimSpace(callsign))
 }
 
-func cleanCallsign(callsign string) string {
+func getBaseCallsign(callsign string) string {
 	if idx := strings.Index(callsign, "-"); idx != -1 {
-		callsign = callsign[:idx]
+		return callsign[:idx]
 	}
-	cs := strings.ToUpper(callsign)
-	if len(cs) > 10 {
-		return cs[:10]
-	}
-	return cs
+	return callsign
 }
 
 func validCallsign(callsign string) bool {
-	re := regexp.MustCompile(`^[A-Z0-9]{1,10}$`)
+	// A simple regex for callsign with optional SSID
+	re := regexp.MustCompile(`^[A-Z0-9]{1,6}(-[0-9]{1,2})?$`)
 	return re.MatchString(callsign)
-}
-
-func aprsPass(callsign string) string {
-	callsign = strings.ToUpper(strings.Split(callsign, "-")[0])
-	hash := uint16(0x73e2)
-	chars := []byte(callsign)
-	for i := 0; i < len(chars); i += 2 {
-		hash ^= uint16(chars[i]) << 8
-		if i+1 < len(chars) {
-			hash ^= uint16(chars[i+1])
-		}
-	}
-	return fmt.Sprintf("%d", hash&0x7fff)
 }
