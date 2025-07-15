@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"aprsmessenger-gateway/internal/models"
 
@@ -29,6 +30,14 @@ func Init(path string) error {
 				callsign TEXT UNIQUE NOT NULL,
 				password_hash TEXT NOT NULL,
 				passcode TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS messages (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				to_callsign TEXT NOT NULL,
+				from_callsign TEXT NOT NULL,
+				message TEXT NOT NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				is_delivered BOOLEAN NOT NULL DEFAULT 0
 			);
 		`)
 	})
@@ -99,4 +108,62 @@ func UserCallsignSet() (map[string]struct{}, error) {
 		}
 	}
 	return set, nil
+}
+
+// Message DB Layer
+
+type Message struct {
+	ID          int
+	ToCallsign  string
+	FromCallsign string
+	Message     string
+	CreatedAt   time.Time
+	IsDelivered bool
+}
+
+// StoreMessage inserts a message into the DB (for later delivery/history).
+func StoreMessage(to, from, msg string) error {
+	_, err := db.Exec(
+		"INSERT INTO messages (to_callsign, from_callsign, message) VALUES (?, ?, ?)",
+		to, from, msg,
+	)
+	return err
+}
+
+// ListUndeliveredMessages returns all undelivered messages for a callsign, ordered oldest first.
+func ListUndeliveredMessages(callsign string) ([]*Message, error) {
+	rows, err := db.Query(
+		"SELECT id, to_callsign, from_callsign, message, created_at, is_delivered FROM messages WHERE to_callsign = ? AND is_delivered = 0 ORDER BY created_at ASC",
+		callsign,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []*Message
+	for rows.Next() {
+		var m Message
+		var created string
+		if err := rows.Scan(&m.ID, &m.ToCallsign, &m.FromCallsign, &m.Message, &created, &m.IsDelivered); err != nil {
+			return nil, err
+		}
+		m.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", created)
+		messages = append(messages, &m)
+	}
+	return messages, nil
+}
+
+// MarkMessagesDelivered marks a list of message IDs as delivered.
+func MarkMessagesDelivered(ids []int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	query := "UPDATE messages SET is_delivered = 1 WHERE id IN (?" + strings.Repeat(",?", len(ids)-1) + ")"
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	_, err := db.Exec(query, args...)
+	return err
 }

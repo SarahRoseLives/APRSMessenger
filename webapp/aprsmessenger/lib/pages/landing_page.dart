@@ -11,23 +11,20 @@ class LandingPage extends StatefulWidget {
 }
 
 class _LandingPageState extends State<LandingPage> {
-  // Toggle between login and register
   bool isRegister = false;
   bool isLoading = false;
   String? errorMsg;
 
-  // Controllers
   final TextEditingController _callsignController = TextEditingController();
   final TextEditingController _passcodeController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmController = TextEditingController();
 
-  // WebSocket channel
   WebSocketChannel? _channel;
 
   @override
   void dispose() {
-    _channel?.sink.close();
+    // Do NOT close the channel here! It will be passed to HomeScreen and closed there.
     _callsignController.dispose();
     _passcodeController.dispose();
     _passwordController.dispose();
@@ -35,21 +32,16 @@ class _LandingPageState extends State<LandingPage> {
     super.dispose();
   }
 
-  void _connectAndSend(Map<String, dynamic> data, Function(bool success, String? error) callback) {
-    _channel?.sink.close();
+  // Only open the WebSocket and send data, pass the open channel to HomeScreen.
+  void _connectAndSend(Map<String, dynamic> data, void Function(WebSocketChannel channel) onConnected) {
     _channel = WebSocketChannel.connect(
       Uri.parse('ws://localhost:8080/ws'),
     );
     _channel!.sink.add(jsonEncode(data));
-    _channel!.stream.first.then((resp) {
-      final map = jsonDecode(resp);
-      callback(map['success'] == true, map['error']);
-    }).timeout(const Duration(seconds: 6), onTimeout: () {
-      callback(false, "No response from server");
-    });
+    onConnected(_channel!);
   }
 
-  void _login() async {
+  void _login() {
     setState(() {
       isLoading = true;
       errorMsg = null;
@@ -67,19 +59,15 @@ class _LandingPageState extends State<LandingPage> {
       "action": "login",
       "callsign": callsign,
       "password": password,
-    }, (success, error) {
+    }, (channel) {
       setState(() => isLoading = false);
-      if (success) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => HomeScreen(callsign: callsign)),
-        );
-      } else {
-        setState(() => errorMsg = error ?? "Login failed");
-      }
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => HomeScreen(callsign: callsign, channel: channel)),
+      );
     });
   }
 
-  void _register() async {
+  void _register() {
     setState(() {
       isLoading = true;
       errorMsg = null;
@@ -107,14 +95,18 @@ class _LandingPageState extends State<LandingPage> {
       "callsign": callsign,
       "passcode": passcode,
       "password": password,
-    }, (success, error) {
+    }, (channel) {
       setState(() => isLoading = false);
-      if (success) {
-        // Auto-login after registration
-        _login();
-      } else {
-        setState(() => errorMsg = error ?? "Registration failed");
-      }
+      // After registration, immediately login using the same open channel.
+      _connectAndSend({
+        "action": "login",
+        "callsign": callsign,
+        "password": password,
+      }, (loginChannel) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => HomeScreen(callsign: callsign, channel: loginChannel)),
+        );
+      });
     });
   }
 

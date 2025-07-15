@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/contact.dart';
 import '../models/chat_message.dart';
 import '../widgets/chat_bubble.dart';
@@ -6,8 +8,8 @@ import '../widgets/contact_tile.dart';
 
 class HomeScreen extends StatefulWidget {
   final String callsign;
-
-  const HomeScreen({super.key, required this.callsign});
+  final WebSocketChannel channel;
+  const HomeScreen({super.key, required this.callsign, required this.channel});
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -18,48 +20,90 @@ class _HomeScreenState extends State<HomeScreen> {
   int? selectedIndex;
   final TextEditingController _chatController = TextEditingController();
 
+  bool _gotLoginResponse = false;
+  String? _loginError;
+
   @override
   void initState() {
     super.initState();
-    recents = [
-      RecentContact(
-        callsign: 'KC4XYZ',
-        lastMessage: 'See you at the next net!',
-        time: '10:02 AM',
-        unread: true,
-        messages: [
-          ChatMessage(fromMe: false, text: "Hello!", time: "9:55 AM"),
-          ChatMessage(fromMe: true, text: "Hi KC4XYZ!", time: "9:56 AM"),
-          ChatMessage(fromMe: false, text: "See you at the next net!", time: "10:02 AM"),
-        ],
-      ),
-      RecentContact(
-        callsign: 'NOCALL',
-        lastMessage: 'Praesent euismod nisl id ex scelerisque...',
-        time: 'Yesterday',
-        unread: false,
-        messages: [
-          ChatMessage(fromMe: false, text: "How's it going?", time: "Yesterday"),
-          ChatMessage(fromMe: true, text: "Doing well, you?", time: "Yesterday"),
-          ChatMessage(fromMe: false, text: "Praesent euismod nisl id ex scelerisque...", time: "Yesterday"),
-        ],
-      ),
-      RecentContact(
-        callsign: 'K5ABC',
-        lastMessage: 'Thanks for the info!',
-        time: '2 days ago',
-        unread: false,
-        messages: [
-          ChatMessage(fromMe: true, text: "Let me know if you need anything else.", time: "2 days ago"),
-          ChatMessage(fromMe: false, text: "Thanks for the info!", time: "2 days ago"),
-        ],
-      ),
-    ];
+    recents = [];
+
+    widget.channel.stream.listen((raw) {
+      try {
+        final msg = jsonDecode(raw);
+        // First response from server is login response, handle error if any
+        if (!_gotLoginResponse) {
+          _gotLoginResponse = true;
+          if (msg is Map && msg.containsKey('success') && msg['success'] != true) {
+            setState(() {
+              _loginError = msg['error'] ?? "Login failed";
+            });
+          }
+          return;
+        }
+        if (msg["aprs_msg"] == true) {
+          final from = (msg["from"] as String).toUpperCase();
+          final to = (msg["to"] as String).toUpperCase();
+          final isHistory = msg["history"] == true;
+          final text = msg["message"] ?? "";
+          final createdAt = msg["created_at"] ?? null;
+          final fromMe = from == widget.callsign;
+
+          final contactCallsign = fromMe ? to : from;
+
+          int idx = recents.indexWhere((c) => c.callsign == contactCallsign);
+          if (idx == -1) {
+            recents.add(RecentContact(
+              callsign: contactCallsign,
+              lastMessage: text,
+              time: _formatTime(createdAt),
+              unread: !fromMe && !isHistory,
+              messages: [
+                ChatMessage(fromMe: fromMe, text: text, time: _formatTime(createdAt)),
+              ],
+            ));
+            idx = recents.length - 1;
+          } else {
+            recents[idx].messages.add(ChatMessage(
+              fromMe: fromMe,
+              text: text,
+              time: _formatTime(createdAt),
+            ));
+            recents[idx] = recents[idx].copyWith(
+              lastMessage: text,
+              time: _formatTime(createdAt),
+              unread: (!fromMe && !isHistory) || recents[idx].unread,
+            );
+          }
+          // If not viewing this contact, set unread
+          if (selectedIndex != idx && !fromMe && !isHistory) {
+            recents[idx] = recents[idx].copyWith(unread: true);
+          }
+          setState(() {});
+        }
+      } catch (e) {
+        // ignore parse errors
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    widget.channel.sink.close();
+    _chatController.dispose();
+    super.dispose();
   }
 
   void _sendMessage() {
     final text = _chatController.text.trim();
     if (text.isEmpty || selectedIndex == null) return;
+    final contact = recents[selectedIndex!];
+    final msg = {
+      "action": "send_message",
+      "to": contact.callsign,
+      "message": text,
+    };
+    widget.channel.sink.add(jsonEncode(msg));
     setState(() {
       recents[selectedIndex!].messages.add(
         ChatMessage(
@@ -82,9 +126,52 @@ class _HomeScreenState extends State<HomeScreen> {
     return "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
   }
 
+  String _formatTime(String? isoTime) {
+    if (isoTime == null) return _currentTime();
+    try {
+      final dt = DateTime.tryParse(isoTime);
+      if (dt == null) return _currentTime();
+      final now = DateTime.now();
+      if (dt.day == now.day && dt.month == now.month && dt.year == now.year) {
+        return "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
+      }
+      return "${dt.month}/${dt.day} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
+    } catch (_) {
+      return _currentTime();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+
+    // If login error, show error message and a back button
+    if (_loginError != null) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text("APRS Messenger"),
+        ),
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _loginError!,
+                style: const TextStyle(color: Colors.red, fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                },
+                child: const Text("Back"),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(60),
@@ -116,20 +203,24 @@ class _HomeScreenState extends State<HomeScreen> {
                     icon: Icon(Icons.notifications_none_outlined, color: Colors.teal.shade700),
                     onPressed: () {},
                   ),
-                  Positioned(
-                    right: 6,
-                    top: 10,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.redAccent,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
-                      child: const Center(
-                        child: Text('2', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                  if (recents.any((c) => c.unread))
+                    Positioned(
+                      right: 6,
+                      top: 10,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.redAccent,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                        child: Center(
+                          child: Text(
+                            '${recents.where((c) => c.unread).length}',
+                            style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ),

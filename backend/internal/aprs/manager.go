@@ -2,8 +2,8 @@ package aprs
 
 import (
 	"log"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 
 	"aprsmessenger-gateway/internal/db"
@@ -122,7 +122,7 @@ func (am *APRSManager) run() {
 			}
 		}
 
-		log.Printf("[APRS] Connected and authenticated as K8SDR-10, filtering for user messages to DB users only")
+		log.Printf("[APRS] Connected and authenticated as K8SDR-10, listening for messages to active users")
 
 		for {
 			frame, err := conn.Next()
@@ -133,8 +133,20 @@ func (am *APRSManager) run() {
 			line := frame.String()
 
 			msg, perr := ParseMessagePacket(line)
-			if perr == nil && msg.IsUserMessage() && am.inCallsignSet(msg.Addressee) {
-				log.Printf("[APRS USER] %s -> %s: %s", msg.Source, msg.Addressee, msg.MessageText)
+			if perr == nil && msg.IsUserMessage() {
+				// Get the base callsign of the message recipient
+				baseDest := baseCallsign(toUpperNoSpace(msg.Addressee))
+
+				am.setMu.RLock()
+				cb, ok := am.callbacks[baseDest]
+				am.setMu.RUnlock()
+
+				if ok {
+					log.Printf("[APRS DISPATCH] %s -> %s: %s", msg.Source, msg.Addressee, msg.MessageText)
+					// Execute the callback in a new goroutine to avoid blocking the listener loop.
+					// This callback will send the message over the websocket.
+					go cb(msg.Source, msg.Addressee, msg.MessageText)
+				}
 			}
 		}
 		log.Printf("[APRS] Disconnected global. Reconnecting in 10s.")
@@ -149,12 +161,20 @@ func (am *APRSManager) run() {
 
 // RegisterUser registers a callback for a user's callsign.
 func (am *APRSManager) RegisterUser(callsign string, cb func(from, to, msg string)) {
-	am.users[callsign] = struct{}{}
-	am.callbacks[callsign] = cb
+	am.setMu.Lock()
+	defer am.setMu.Unlock()
+	cleanCallsign := toUpperNoSpace(callsign)
+	am.users[cleanCallsign] = struct{}{}
+	am.callbacks[cleanCallsign] = cb
+	log.Printf("[APRS Manager] Registered callback for %s", cleanCallsign)
 }
 
 // UnregisterUser removes a user's callback registration.
 func (am *APRSManager) UnregisterUser(callsign string) {
-	delete(am.users, callsign)
-	delete(am.callbacks, callsign)
+	am.setMu.Lock()
+	defer am.setMu.Unlock()
+	cleanCallsign := toUpperNoSpace(callsign)
+	delete(am.users, cleanCallsign)
+	delete(am.callbacks, cleanCallsign)
+	log.Printf("[APRS Manager] Unregistered callback for %s", cleanCallsign)
 }

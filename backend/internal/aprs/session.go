@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"aprsmessenger-gateway/internal/db"
 )
 
 // Session represents an in-memory structure for a user's websocket and message delivery
@@ -34,8 +36,14 @@ func (s *Session) AttachWebSocket(ws *websocket.Conn) {
 
 	// Register callback with global APRS manager
 	GetAPRSManager().RegisterUser(s.Callsign, func(from, to, msg string) {
+		// Save to DB before deliver
+		if err := db.StoreMessage(to, from, msg); err != nil {
+			log.Printf("[APRS] Failed to store message for %s: %v", to, err)
+		}
 		s.broadcastWSMessage(from, to, msg)
 	})
+	// On attach, send any undelivered messages from DB
+	go s.deliverUndeliveredHistory(ws)
 }
 
 // keepAliveWS sends pings and removes ws client on disconnect.
@@ -70,6 +78,32 @@ func (s *Session) broadcastWSMessage(from, to, msg string) {
 	for ws := range s.wsClients {
 		_ = ws.WriteJSON(resp)
 	}
+}
+
+// deliverUndeliveredHistory sends any undelivered messages from DB to the websocket, and marks them delivered.
+func (s *Session) deliverUndeliveredHistory(ws *websocket.Conn) {
+	messages, err := db.ListUndeliveredMessages(s.Callsign)
+	if err != nil {
+		log.Printf("[APRS] Failed to fetch undelivered messages for %s: %v", s.Callsign, err)
+		return
+	}
+	if len(messages) == 0 {
+		return
+	}
+	var ids []int
+	for _, m := range messages {
+		resp := map[string]interface{}{
+			"aprs_msg": true,
+			"from":     m.FromCallsign,
+			"to":       m.ToCallsign,
+			"message":  m.Message,
+			"history":  true,
+			"created_at": m.CreatedAt.Format(time.RFC3339),
+		}
+		_ = ws.WriteJSON(resp)
+		ids = append(ids, m.ID)
+	}
+	_ = db.MarkMessagesDelivered(ids)
 }
 
 // SessionsManager manages all in-memory user sessions.
