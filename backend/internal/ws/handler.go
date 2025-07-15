@@ -155,7 +155,6 @@ func handleSendMessage(conn *websocket.Conn, fromCallsign, baseUserCallsign stri
 	}
 
 	log.Printf("[WS] Queuing message from %s to %s", fromCallsign, toCallsign)
-	// Pass (fromCallsign, toCallsign, req.Message) to SendMessage.
 	err := aprs.GetAPRSManager().SendMessage(fromCallsign, toCallsign, req.Message)
 
 	if err != nil {
@@ -169,7 +168,10 @@ func handleSendMessage(conn *websocket.Conn, fromCallsign, baseUserCallsign stri
 
 		// Broadcast the sent message to the user's other clients for synchronization.
 		if session := aprs.GetSessionsManager().GetSession(baseUserCallsign); session != nil {
-			session.BroadcastMessage(fromCallsign, toCallsign, req.Message, conn)
+            // For the echo back to the sender, create a simplified representation of the path.
+            // The actual path will be parsed when the packet is heard back from APRS-IS.
+			echoRoute := []string{"APRS", "K8SDR-10"}
+			session.BroadcastMessage(fromCallsign, toCallsign, req.Message, echoRoute, conn)
 		}
 	}
 }

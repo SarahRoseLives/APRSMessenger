@@ -8,6 +8,7 @@ import '../models/chat_message.dart';
 import '../services/websocket_service.dart';
 import '../widgets/chat_bubble.dart';
 import '../widgets/contact_tile.dart';
+import '../widgets/message_route_map.dart';
 import 'admin_panel_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -24,6 +25,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<RecentContact> recents = [];
   int? selectedIndex;
   final TextEditingController _chatController = TextEditingController();
+  final ScrollController _chatScrollController = ScrollController(); // ADDED
 
   bool _gotLoginResponse = false;
   String? _loginError;
@@ -119,6 +121,11 @@ class _HomeScreenState extends State<HomeScreen> {
         final isHistory = msg["history"] == true;
         final text = msg["message"] ?? "";
         final createdAt = msg["created_at"];
+        final routeHops = msg['route'] != null && msg['route'] is List
+            ? (msg['route'] as List)
+                .map((hop) => RouteHop.fromJson(hop))
+                .toList()
+            : null;
 
         final userBaseCallsign =
             (_socketService.callsign ?? '').toUpperCase().split('-').first;
@@ -143,6 +150,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   fromMe: fromMe, text: text, time: _displayTime(createdAt)),
             ],
             unread: !fromMe && !isHistory,
+            route: routeHops,
           ));
           idx = recents.length - 1;
         } else {
@@ -157,8 +165,12 @@ class _HomeScreenState extends State<HomeScreen> {
             lastMessage: text,
             time: _formatTime(createdAt),
             unread: (!fromMe && !isHistory) || recents[idx].unread,
+            route: routeHops ?? recents[idx].route,
           );
         }
+        // If the message is for the currently selected chat and not from history, we should scroll.
+        final bool shouldScroll = selectedIndex == idx && !isHistory;
+
         // If not viewing this contact, set unread
         if (selectedIndex != idx && !fromMe && !isHistory) {
           recents[idx] = recents[idx].copyWith(unread: true);
@@ -168,6 +180,10 @@ class _HomeScreenState extends State<HomeScreen> {
         recents.sort((a, b) => b.time.compareTo(a.time));
 
         setState(() {});
+
+        if (shouldScroll) {
+          _scrollToBottom();
+        }
       }
     } catch (e) {
       // Ignore parse errors
@@ -179,7 +195,22 @@ class _HomeScreenState extends State<HomeScreen> {
     _streamSubscription?.cancel();
     _socketService.removeListener(_handleConnectionChange);
     _chatController.dispose();
+    _chatScrollController.dispose(); // MODIFIED
     super.dispose();
+  }
+
+  // ADDED: Method to scroll chat to the bottom
+  void _scrollToBottom() {
+    // A small delay ensures the ListView has rebuilt before we scroll.
+    Future.delayed(const Duration(milliseconds: 50), () {
+      if (_chatScrollController.hasClients) {
+        _chatScrollController.animateTo(
+          0.0, // With a reversed list, the bottom is at offset 0.0
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
 
   void _sendMessage() {
@@ -208,6 +239,7 @@ class _HomeScreenState extends State<HomeScreen> {
       recents.sort((a, b) => b.time.compareTo(a.time));
       _chatController.clear();
     });
+    _scrollToBottom(); // MODIFIED
   }
 
   String _currentTime() {
@@ -392,6 +424,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   selectedIndex = i;
                                   recents[i] = c.copyWith(unread: false);
                                 });
+                                _scrollToBottom(); // MODIFIED
                               },
                             );
                           },
@@ -401,7 +434,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 const SizedBox(width: 32),
-                // Chat Panel
+                // Chat and Map Panel
                 Expanded(
                   child: Container(
                     decoration: BoxDecoration(
@@ -451,6 +484,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         : Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
+                              // Chat Header Bar
                               Container(
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 24, vertical: 20),
@@ -497,22 +531,28 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                               ),
                               const Divider(height: 1),
+                              // Chat Messages
                               Expanded(
                                 child: ListView.builder(
+                                  controller: _chatScrollController, // MODIFIED
+                                  reverse: true, // MODIFIED
                                   padding: const EdgeInsets.symmetric(
                                       vertical: 16, horizontal: 16),
                                   itemCount:
                                       recents[selectedIndex!].messages.length,
                                   itemBuilder: (context, i) {
+                                    // MODIFIED: Access items in reverse for the reversed ListView
+                                    final index = recents[selectedIndex!].messages.length - 1 - i;
                                     final msg =
-                                        recents[selectedIndex!].messages[i];
+                                        recents[selectedIndex!].messages[index];
                                     return ChatBubble(message: msg);
                                   },
                                 ),
                               ),
+                              // Message Entry Box
                               Padding(
                                 padding:
-                                    const EdgeInsets.fromLTRB(18, 0, 18, 18),
+                                    const EdgeInsets.fromLTRB(18, 0, 18, 12),
                                 child: Row(
                                   children: [
                                     Expanded(
@@ -547,6 +587,18 @@ class _HomeScreenState extends State<HomeScreen> {
                                       ),
                                     ),
                                   ],
+                                ),
+                              ),
+                              // Map Widget BELOW the chat/input
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+                                child: SizedBox(
+                                  height: 200, // Increased height for better map view
+                                  child: MessageRouteMap(
+                                    route: recents[selectedIndex!].route ?? [],
+                                    contact: recents[selectedIndex!].callsign,
+                                    // The `horizontal` parameter is no longer needed.
+                                  ),
                                 ),
                               ),
                             ],

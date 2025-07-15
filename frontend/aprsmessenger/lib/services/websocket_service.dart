@@ -16,6 +16,11 @@ class WebSocketService with ChangeNotifier {
   /// The public stream of messages for the UI.
   Stream<dynamic> get messages => _messageStreamController.stream;
 
+  // --- MODIFICATION START ---
+  /// Public cache to hold all received messages, preventing loss before UI listens.
+  final List<dynamic> messageCache = [];
+  // --- MODIFICATION END ---
+
   SocketStatus _status = SocketStatus.disconnected;
   SocketStatus get status => _status;
 
@@ -56,8 +61,11 @@ class WebSocketService with ChangeNotifier {
                 msg.containsKey('success')) {
               loginCompleter.complete(Map<String, dynamic>.from(msg));
             } else {
-              // This is a regular message (history or real-time). Add it to the UI stream.
+              // --- MODIFICATION START ---
+              // Add to cache for future listeners and to stream for current listeners.
+              messageCache.add(data);
               _messageStreamController.add(data);
+              // --- MODIFICATION END ---
             }
           } catch (e) {
             debugPrint("WebSocket message parse error: $e");
@@ -131,7 +139,11 @@ class WebSocketService with ChangeNotifier {
                 msg.containsKey('success')) {
               loginCompleter.complete(Map<String, dynamic>.from(msg));
             } else {
+              // --- MODIFICATION START ---
+              // Also apply the same caching logic for token login
+              messageCache.add(data);
               _messageStreamController.add(data);
+              // --- MODIFICATION END ---
             }
           } catch (e) {
             if (!loginCompleter.isCompleted) {

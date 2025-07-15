@@ -6,6 +6,7 @@ import '../models/contact.dart';
 import '../models/chat_message.dart';
 import '../services/websocket_service.dart';
 import '../widgets/contact_tile.dart';
+import '../widgets/message_route_map.dart'; // Import for RouteHop
 import 'admin_panel_screen.dart';
 import 'chat_screen.dart';
 import 'landing_page.dart'; // Import the landing page
@@ -33,6 +34,14 @@ class _HomeScreenState extends State<HomeScreen> {
     // Ensures we only subscribe once
     if (_streamSubscription == null) {
       _socketService = Provider.of<WebSocketService>(context);
+
+      // --- MODIFICATION START ---
+      // Process all messages from the cache that arrived before this screen was ready.
+      for (final raw in _socketService.messageCache) {
+        _onNewMessage(raw);
+      }
+      // --- MODIFICATION END ---
+
       _streamSubscription = _socketService.messages.listen(_onNewMessage);
 
       // Listen for connection errors that might happen after login
@@ -65,6 +74,12 @@ class _HomeScreenState extends State<HomeScreen> {
         final createdAt = msg["created_at"];
         final isHistory = msg["history"] == true;
 
+        final routeHops = msg['route'] != null && msg['route'] is List
+            ? (msg['route'] as List)
+                .map((hop) => RouteHop.fromJson(hop))
+                .toList()
+            : null;
+
         final userBaseCallsign = _socketService.callsign!.split('-').first;
         final fromBaseCallsign = from.split('-').first;
         final fromMe = fromBaseCallsign == userBaseCallsign;
@@ -91,10 +106,19 @@ class _HomeScreenState extends State<HomeScreen> {
             time: _formatTime(createdAt),
             unread: !fromMe && !isHistory,
             messages: [newMessage],
+            route: routeHops,
           ));
         } else {
           // Contact group exists, update it immutably.
           final contact = recents[idx];
+
+          // --- MODIFICATION START ---
+          // **DE-DUPLICATION**: Check if we already have this message.
+          if (contact.messages.any((m) =>
+              m.text == newMessage.text && m.time == newMessage.time)) {
+            return; // Skip duplicate message
+          }
+          // --- MODIFICATION END ---
 
           final updatedMessages = List<ChatMessage>.from(contact.messages)
             ..add(newMessage);
@@ -109,6 +133,7 @@ class _HomeScreenState extends State<HomeScreen> {
             time: _formatTime(createdAt),
             unread: (!fromMe && !isHistory) || contact.unread,
             messages: updatedMessages,
+            route: routeHops ?? contact.route,
           );
         }
         // Sort the recents list to bring the most recent conversations to the top

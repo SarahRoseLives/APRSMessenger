@@ -14,6 +14,14 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// RouteHop represents a single hop in a message's path for JSON marshalling.
+// We are only sending the callsign for now. Lat/Lon are placeholders for future use.
+type RouteHop struct {
+	Callsign string  `json:"callsign"`
+	Lat      float64 `json:"lat,omitempty"`
+	Lon      float64 `json:"lon,omitempty"`
+}
+
 // Session represents an in-memory structure for a user's websocket and message delivery
 type Session struct {
 	Callsign string
@@ -37,12 +45,12 @@ func (s *Session) AttachWebSocket(ws *websocket.Conn) {
 	// If this is the first client, register the user with the global APRS listener
 	if len(s.wsClients) == 0 {
 		log.Printf("[APRS] First WebSocket attached, registering callback for %s", s.Callsign)
-		GetAPRSManager().RegisterUser(s.Callsign, func(from, to, msg string) {
+		GetAPRSManager().RegisterUser(s.Callsign, func(from, to, msg string, path []string) {
 			if err := db.StoreMessage(to, from, msg); err != nil {
 				log.Printf("[APRS] Failed to store message for %s: %v", to, err)
 			}
 			// Broadcast incoming messages to all clients, with no exclusions.
-			s.BroadcastMessage(from, to, msg, nil)
+			s.BroadcastMessage(from, to, msg, path, nil)
 		})
 	}
 	s.wsClients[ws] = struct{}{}
@@ -85,19 +93,45 @@ func (s *Session) keepAliveWS(ws *websocket.Conn) {
 }
 
 // BroadcastMessage sends a message to all attached websockets, optionally excluding one.
-func (s *Session) BroadcastMessage(from, to, msg string, exclude *websocket.Conn) {
+func (s *Session) BroadcastMessage(from, to, msg string, path []string, exclude *websocket.Conn) {
 	s.wsMu.Lock()
 	defer s.wsMu.Unlock()
 
 	if len(s.wsClients) == 0 {
 		return
 	}
+
+	var routeHops []RouteHop
+	// Build the full visual route: [from, ...path, to]
+	fullRoute := []string{from}
+	if path != nil {
+		fullRoute = append(fullRoute, path...)
+	}
+	fullRoute = append(fullRoute, to)
+
+	// Remove duplicates and clean up path markers (e.g., WIDE2-2*)
+	seen := make(map[string]bool)
+	uniqueRoute := []string{}
+	for _, hop := range fullRoute {
+		cleanHop := strings.TrimRight(hop, "*")
+		if !seen[cleanHop] {
+			seen[cleanHop] = true
+			uniqueRoute = append(uniqueRoute, cleanHop)
+		}
+	}
+
+	for _, hopCallsign := range uniqueRoute {
+		// In the future, you could look up coordinates for each hopCallsign here.
+		routeHops = append(routeHops, RouteHop{Callsign: hopCallsign})
+	}
+
 	resp := map[string]interface{}{
 		"aprs_msg":   true,
 		"from":       from,
 		"to":         to,
 		"message":    msg,
 		"created_at": time.Now().UTC().Format(time.RFC3339),
+		"route":      routeHops,
 	}
 
 	for ws := range s.wsClients {

@@ -10,6 +10,7 @@ type MessagePacket struct {
 	// Common
 	Format       string // "message", "bulletin", "group-bulletin", "announcement", "telemetry"
 	Source       string
+	Path         []string // The digipeater path
 	Addressee    string
 	MessageText  string
 	MsgNo        string // Message number or ID
@@ -42,9 +43,13 @@ func ParseMessagePacket(line string) (*MessagePacket, error) {
 	}
 	info := line[headerIdx+1:]
 
-	// Get the source callsign, if present
+	// Get the source callsign and path, if present
 	if strings.Contains(header, ">") {
-		packet.Source = strings.SplitN(header, ">", 2)[0]
+		parts := strings.SplitN(header, ">", 2)
+		packet.Source = parts[0]
+		// The path is the part after '>', e.g. "APRS,K8SDR*,qAC,K8SDR-10"
+		pathStr := parts[1]
+		packet.Path = strings.Split(pathStr, ",")
 	}
 
 	// 0. User message: :TARGET   :message

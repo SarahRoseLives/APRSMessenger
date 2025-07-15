@@ -1,21 +1,25 @@
 import 'chat_message.dart';
+import '../widgets/message_route_map.dart';
 
 class RecentContact {
-  final String groupingId; // Base callsign of the contact, e.g., "K8CY"
-  final String callsign; // Full, most recent callsign of the contact, e.g., "K8CY-5"
-  final String? ownCallsign; // The user's full callsign for this chat, e.g., "AD8NT-10"
+  final String groupingId;
+  final String callsign;
+  final String ownCallsign;
   final String lastMessage;
   final String time;
-  final bool unread;
   final List<ChatMessage> messages;
+  final bool unread;
+  final List<RouteHop>? route; // <--- ADDED
+
   RecentContact({
     required this.groupingId,
     required this.callsign,
-    this.ownCallsign,
+    required this.ownCallsign,
     required this.lastMessage,
     required this.time,
-    this.unread = false,
     required this.messages,
+    required this.unread,
+    this.route,
   });
 
   RecentContact copyWith({
@@ -24,8 +28,9 @@ class RecentContact {
     String? ownCallsign,
     String? lastMessage,
     String? time,
-    bool? unread,
     List<ChatMessage>? messages,
+    bool? unread,
+    List<RouteHop>? route,
   }) {
     return RecentContact(
       groupingId: groupingId ?? this.groupingId,
@@ -33,8 +38,9 @@ class RecentContact {
       ownCallsign: ownCallsign ?? this.ownCallsign,
       lastMessage: lastMessage ?? this.lastMessage,
       time: time ?? this.time,
-      unread: unread ?? this.unread,
       messages: messages ?? this.messages,
+      unread: unread ?? this.unread,
+      route: route ?? this.route,
     );
   }
 }

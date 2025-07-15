@@ -17,7 +17,7 @@ type APRSManager struct {
 	conn      *aprsis.APRSIS
 	connMu    sync.RWMutex
 	stopCh    chan struct{}
-	callbacks map[string]func(from, to, msg string)
+	callbacks map[string]func(from, to, msg string, path []string) // Updated callback
 	users     map[string]struct{}
 	setMu     sync.RWMutex
 }
@@ -39,7 +39,7 @@ func GetAPRSManager() *APRSManager {
 // NewAPRSManager creates a new APRSManager instance.
 func NewAPRSManager() *APRSManager {
 	return &APRSManager{
-		callbacks: make(map[string]func(from, to, msg string)),
+		callbacks: make(map[string]func(from, to, msg string, path []string)), // Updated callback
 		users:     make(map[string]struct{}),
 		stopCh:    make(chan struct{}),
 	}
@@ -136,7 +136,8 @@ func (am *APRSManager) run() {
 					if session != nil {
 						// Only log if we are actually forwarding to a client (online)
 						log.Printf("[APRS RAW] %s", line)
-						session.BroadcastMessage(msg.Source, msg.Addressee, msg.MessageText, nil)
+						// Pass the path to the broadcast
+						session.BroadcastMessage(msg.Source, msg.Addressee, msg.MessageText, msg.Path, nil)
 					}
 				}
 			}
@@ -155,7 +156,7 @@ func (am *APRSManager) run() {
 }
 
 // RegisterUser registers a callback for a user's callsign.
-func (am *APRSManager) RegisterUser(callsign string, cb func(from, to, msg string)) {
+func (am *APRSManager) RegisterUser(callsign string, cb func(from, to, msg string, path []string)) {
 	am.setMu.Lock()
 	defer am.setMu.Unlock()
 	cleanCallsign := toUpperNoSpace(callsign)
