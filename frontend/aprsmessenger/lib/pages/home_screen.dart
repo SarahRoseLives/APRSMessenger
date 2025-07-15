@@ -40,6 +40,12 @@ class _HomeScreenState extends State<HomeScreen> {
     super.didChangeDependencies();
     if (_streamSubscription == null) {
       _socketService = Provider.of<WebSocketService>(context);
+
+      // Process all messages from the cache that arrived before this screen was ready.
+      for (final raw in _socketService.messageCache) {
+        _onNewMessage(raw);
+      }
+
       _streamSubscription = _socketService.messages.listen(_onNewMessage);
       _socketService.addListener(_handleConnectionChange);
     }
@@ -66,35 +72,35 @@ class _HomeScreenState extends State<HomeScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text("Login on Mobile App"),
-          content: SizedBox(
-            width: 250,
-            height: 250,
-            child: Center(
-              child: QrImageView(
-                data: token,
-                version: QrVersions.auto,
-                size: 220.0,
-                gapless: false,
-                eyeStyle: QrEyeStyle(
-                  eyeShape: QrEyeShape.square,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                dataModuleStyle: QrDataModuleStyle(
-                  dataModuleShape: QrDataModuleShape.square,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("Login on Mobile App"),
+        content: SizedBox(
+          width: 250,
+          height: 250,
+          child: Center(
+            child: QrImageView(
+              data: token,
+              version: QrVersions.auto,
+              size: 220.0,
+              gapless: false,
+              eyeStyle: QrEyeStyle(
+                eyeShape: QrEyeShape.square,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              dataModuleStyle: QrDataModuleStyle(
+                dataModuleShape: QrDataModuleShape.square,
+                color: Theme.of(context).colorScheme.primary,
               ),
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text("Close"),
-            ),
-          ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text("Close"),
+          ),
+        ],
+      ),
     );
   }
 
@@ -240,6 +246,85 @@ class _HomeScreenState extends State<HomeScreen> {
       _chatController.clear();
     });
     _scrollToBottom(); // MODIFIED
+  }
+
+  void _showNewMessageDialog() {
+    final callsignController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text("New Message"),
+          content: TextField(
+            controller: callsignController,
+            textCapitalization: TextCapitalization.characters,
+            decoration: const InputDecoration(
+              labelText: "Recipient Callsign",
+              border: OutlineInputBorder(),
+            ),
+            autofocus: true,
+            onSubmitted: (value) {
+              Navigator.of(context).pop();
+              _startChatWithCallsign(value);
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text("Cancel"),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _startChatWithCallsign(callsignController.text);
+              },
+              child: const Text("Message"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _startChatWithCallsign(String callsignRaw) {
+    final String callsign = callsignRaw.trim().toUpperCase();
+    if (callsign.isEmpty) return;
+
+    final String groupingKey = callsign.split('-').first;
+    final int existingIndex =
+        recents.indexWhere((c) => c.groupingId == groupingKey);
+
+    if (existingIndex != -1) {
+      // Chat already exists, just select it.
+      setState(() {
+        selectedIndex = existingIndex;
+        if (recents[existingIndex].unread) {
+          recents[existingIndex] =
+              recents[existingIndex].copyWith(unread: false);
+        }
+      });
+    } else {
+      // Create a new, temporary contact to start the chat
+      final newContact = RecentContact(
+        groupingId: groupingKey,
+        callsign: callsign,
+        ownCallsign: _socketService.callsign!,
+        lastMessage: "No messages yet.",
+        time: DateTime.now().toIso8601String(),
+        unread: false,
+        messages: [], // Empty message list
+        route: null,
+      );
+
+      setState(() {
+        recents.add(newContact);
+        // Sort to bring the new contact to the top
+        recents.sort((a, b) => b.time.compareTo(a.time));
+        // Find its new index and select it
+        selectedIndex = recents.indexWhere((c) => c.groupingId == groupingKey);
+      });
+    }
+    _scrollToBottom();
   }
 
   String _currentTime() {
@@ -405,6 +490,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                 letterSpacing: 0.2,
                               ),
                             ),
+                            const Spacer(),
+                            IconButton(
+                              icon: Icon(Icons.add_comment_outlined,
+                                  color: theme.colorScheme.primary),
+                              tooltip: "New Message",
+                              onPressed: _showNewMessageDialog,
+                            ),
                           ],
                         ),
                       ),
@@ -470,7 +562,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                   const SizedBox(height: 14),
                                   Text(
-                                    "Select a recent contact on the left to view your message history and start chatting.",
+                                    "Select a recent contact on the left to view your message history, or click the '+' icon to start a new chat.",
                                     textAlign: TextAlign.center,
                                     style: TextStyle(
                                       color: Colors.grey.shade700,
@@ -534,7 +626,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               // Chat Messages
                               Expanded(
                                 child: ListView.builder(
-                                  controller: _chatScrollController, // MODIFIED
+                                  controller:
+                                      _chatScrollController, // MODIFIED
                                   reverse: true, // MODIFIED
                                   padding: const EdgeInsets.symmetric(
                                       vertical: 16, horizontal: 16),
@@ -542,7 +635,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                       recents[selectedIndex!].messages.length,
                                   itemBuilder: (context, i) {
                                     // MODIFIED: Access items in reverse for the reversed ListView
-                                    final index = recents[selectedIndex!].messages.length - 1 - i;
+                                    final index = recents[selectedIndex!]
+                                            .messages
+                                            .length -
+                                        1 -
+                                        i;
                                     final msg =
                                         recents[selectedIndex!].messages[index];
                                     return ChatBubble(message: msg);
@@ -593,9 +690,11 @@ class _HomeScreenState extends State<HomeScreen> {
                               Padding(
                                 padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
                                 child: SizedBox(
-                                  height: 200, // Increased height for better map view
+                                  height:
+                                      200, // Increased height for better map view
                                   child: MessageRouteMap(
-                                    route: recents[selectedIndex!].route ?? [],
+                                    route:
+                                        recents[selectedIndex!].route ?? [],
                                     contact: recents[selectedIndex!].callsign,
                                     // The `horizontal` parameter is no longer needed.
                                   ),

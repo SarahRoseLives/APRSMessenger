@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'pages/landing_page.dart' as web;
 import 'appui/landing_page.dart' as app;
@@ -10,6 +10,12 @@ class APRSMessengerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Determine if the platform is a desktop OS (Linux, Windows, macOS).
+    final bool isDesktop = !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.linux ||
+            defaultTargetPlatform == TargetPlatform.windows ||
+            defaultTargetPlatform == TargetPlatform.macOS);
+
     return MaterialApp(
       title: 'APRS Messenger',
       debugShowCheckedModeBanner: false,
@@ -39,8 +45,8 @@ class APRSMessengerApp extends StatelessWidget {
           ),
         ),
       ),
-      // Use kIsWeb to determine which UI to show
-      home: kIsWeb ? const web.LandingPage() : const app.LandingPage(),
+      // Use the desktop UI for web and desktop platforms, otherwise use the app UI.
+      home: isDesktop || kIsWeb ? const web.LandingPage() : const app.LandingPage(),
     );
   }
 }

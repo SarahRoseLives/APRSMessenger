@@ -124,11 +124,13 @@ class _HomeScreenState extends State<HomeScreen> {
             ..add(newMessage);
 
           // Sort messages by time to ensure they are in order
-          updatedMessages.sort((a, b) => (a.time ?? "").compareTo(b.time ?? ""));
+          updatedMessages
+              .sort((a, b) => (a.time ?? "").compareTo(b.time ?? ""));
 
           recents[idx] = contact.copyWith(
             callsign: otherPartyCallsign, // Update to the latest full callsign
-            ownCallsign: ownCallsignForChat, // Update our own callsign used in chat
+            ownCallsign:
+                ownCallsignForChat, // Update our own callsign used in chat
             lastMessage: text,
             time: _formatTime(createdAt),
             unread: (!fromMe && !isHistory) || contact.unread,
@@ -147,6 +149,89 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _showNewMessageDialog() {
+    final callsignController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text("New Message"),
+          content: TextField(
+            controller: callsignController,
+            textCapitalization: TextCapitalization.characters,
+            decoration: const InputDecoration(
+              hintText: "Enter callsign",
+              border: OutlineInputBorder(),
+            ),
+            autofocus: true,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text("Cancel"),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final String callsign =
+                    callsignController.text.trim().toUpperCase();
+                if (callsign.isEmpty) return;
+
+                Navigator.of(context).pop(); // Dismiss dialog
+                _navigateToChat(callsign);
+              },
+              child: const Text("Message"),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _navigateToChat(String callsign) {
+    final String groupingKey = callsign.split('-').first;
+    final int existingIndex =
+        recents.indexWhere((c) => c.groupingId == groupingKey);
+
+    RecentContact contact;
+
+    if (existingIndex != -1) {
+      // Chat already exists, use that one.
+      contact = recents[existingIndex];
+      // Mark as read when navigating.
+      if (contact.unread) {
+        setState(() => recents[existingIndex] = contact.copyWith(unread: false));
+      }
+    } else {
+      // Create a new, temporary contact object to start the conversation.
+      // This object won't be added to the main 'recents' list. The ChatScreen
+      // will use it, and when the first message is sent, the websocket echo
+      // will cause the real contact to be created and added to the list.
+      contact = RecentContact(
+        groupingId: groupingKey,
+        callsign: callsign,
+        ownCallsign: _socketService.callsign!,
+        lastMessage: "",
+        time: DateTime.now().toIso8601String(),
+        unread: false,
+        messages: [],
+        route: null,
+      );
+    }
+
+    // Navigate to ChatScreen with the determined contact info
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ChangeNotifierProvider.value(
+          value: _socketService,
+          child: ChatScreen(
+            contact: contact,
+          ),
+        ),
+      ),
+    );
+  }
+
   String _formatTime(String? isoTime) {
     if (isoTime == null) return "";
     final dt = DateTime.tryParse(isoTime);
@@ -156,16 +241,15 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _displayTime(String? isoTime) {
-      if (isoTime == null) return "";
-      final dt = DateTime.tryParse(isoTime);
-      if (dt == null) return "";
-      final now = DateTime.now();
-      if (dt.day == now.day && dt.month == now.month && dt.year == now.year) {
-          return "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
-      }
-      return "${dt.year}-${dt.month.toString().padLeft(2,'0')}-${dt.day.toString().padLeft(2,'0')}";
+    if (isoTime == null) return "";
+    final dt = DateTime.tryParse(isoTime);
+    if (dt == null) return "";
+    final now = DateTime.now();
+    if (dt.day == now.day && dt.month == now.month && dt.year == now.year) {
+      return "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
+    }
+    return "${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}";
   }
-
 
   @override
   void dispose() {
@@ -218,21 +302,18 @@ class _HomeScreenState extends State<HomeScreen> {
             displayTime: _displayTime(contact.time),
             selected: false,
             onTap: () async {
-              setState(() => recents[i] = contact.copyWith(unread: false));
-              await Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => ChangeNotifierProvider.value(
-                    value: socketService,
-                    child: ChatScreen(
-                      contact: contact,
-                    ),
-                  ),
-                ),
-              );
-              setState(() {}); // Refresh state when returning
+              // Use the _navigateToChat method to handle navigation and state updates
+              _navigateToChat(contact.callsign);
             },
           );
         },
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _showNewMessageDialog,
+        tooltip: 'New Message',
+        backgroundColor: Theme.of(context).colorScheme.primary,
+        foregroundColor: Colors.white,
+        child: const Icon(Icons.add_comment_outlined),
       ),
     );
   }
