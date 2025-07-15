@@ -137,11 +137,11 @@ func ListAllMessagesForUser(callsign string) ([]*Message, error) {
 		SELECT id, to_callsign, from_callsign, message, created_at, is_delivered
 		FROM messages
 		WHERE
-			(from_callsign = ?) OR
+			(from_callsign = ? OR from_callsign LIKE ? || '-%') OR
 			(to_callsign = ? OR to_callsign LIKE ? || '-%')
 		ORDER BY created_at ASC
 	`
-	rows, err := db.Query(query, callsign, callsign, callsign)
+	rows, err := db.Query(query, callsign, callsign, callsign, callsign)
 	if err != nil {
 		return nil, err
 	}
@@ -160,6 +160,70 @@ func ListAllMessagesForUser(callsign string) ([]*Message, error) {
 	return messages, nil
 }
 // ****************************
+
+// GetConversationBetween returns all messages between two callsigns, ordered by created_at.
+// This function is SSID-aware - it will match exact SSIDs when provided, or any SSID for base callsigns.
+func GetConversationBetween(callsign1, callsign2 string) ([]*Message, error) {
+	const query = `
+		SELECT id, to_callsign, from_callsign, message, created_at, is_delivered
+		FROM messages
+		WHERE 
+			(from_callsign = ? AND to_callsign = ?) OR 
+			(from_callsign = ? AND to_callsign = ?)
+		ORDER BY created_at ASC
+	`
+	rows, err := db.Query(query, callsign1, callsign2, callsign2, callsign1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []*Message
+	for rows.Next() {
+		var m Message
+		var created string
+		if err := rows.Scan(&m.ID, &m.ToCallsign, &m.FromCallsign, &m.Message, &created, &m.IsDelivered); err != nil {
+			return nil, err
+		}
+		m.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", created)
+		messages = append(messages, &m)
+	}
+	return messages, nil
+}
+
+// GroupMessagesByPairs returns a map of conversation pairs to their message lists for a given user.
+// The map key is formatted as "CALL1<->CALL2" where CALL1 is alphabetically first.
+func GroupMessagesByPairs(userCallsign string) (map[string][]*Message, error) {
+	messages, err := ListAllMessagesForUser(userCallsign)
+	if err != nil {
+		return nil, err
+	}
+
+	conversations := make(map[string][]*Message)
+	
+	for _, msg := range messages {
+		var otherCallsign string
+		if msg.FromCallsign == userCallsign || strings.HasPrefix(msg.FromCallsign, userCallsign+"-") {
+			// This is a message sent by the user
+			otherCallsign = msg.ToCallsign
+		} else {
+			// This is a message received by the user
+			otherCallsign = msg.FromCallsign
+		}
+
+		// Create a consistent key for the conversation pair
+		var key string
+		if userCallsign < otherCallsign {
+			key = userCallsign + "<->" + otherCallsign
+		} else {
+			key = otherCallsign + "<->" + userCallsign
+		}
+
+		conversations[key] = append(conversations[key], msg)
+	}
+
+	return conversations, nil
+}
 
 // ListUndeliveredMessages returns all undelivered messages for a callsign, ordered oldest first.
 func ListUndeliveredMessages(callsign string) ([]*Message, error) {

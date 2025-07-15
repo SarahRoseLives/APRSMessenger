@@ -99,9 +99,15 @@ func (am *APRSManager) run() {
 
 			msg, perr := ParseMessagePacket(line)
 			if perr == nil && msg.IsUserMessage() {
-				baseDest := baseCallsign(toUpperNoSpace(msg.Addressee))
+				fullDest := toUpperNoSpace(msg.Addressee)
+				baseDest := baseCallsign(fullDest)
+				
 				am.setMu.RLock()
-				cb, ok := am.callbacks[baseDest]
+				// First try exact SSID match, then fallback to base callsign
+				cb, ok := am.callbacks[fullDest]
+				if !ok {
+					cb, ok = am.callbacks[baseDest]
+				}
 				am.setMu.RUnlock()
 
 				if ok {

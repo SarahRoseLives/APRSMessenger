@@ -1,0 +1,8 @@
+# Build artifacts
+backend/aprsmessenger-gateway-test
+backend/aprsmessenger-gateway
+*.exe
+*.out
+
+# Database files
+backend/data/

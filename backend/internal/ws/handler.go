@@ -82,6 +82,7 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	log.Printf("WebSocket connection from %s", r.RemoteAddr)
 
 	var user *models.User
+	var originalCallsign string
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -99,13 +100,14 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		case "create_account":
 			handleCreateAccount(conn, req)
 		case "login":
+			originalCallsign = strings.ToUpper(strings.TrimSpace(req.Callsign))
 			user, err = attemptLogin(req)
 			if err != nil {
 				sendResponse(conn, false, err.Error())
 				log.Printf("Login failed for %s: %v", req.Callsign, err)
 			} else {
 				sendResponse(conn, true, "")
-				log.Printf("Login success: %s", user.Callsign)
+				log.Printf("Login success: %s (session for %s)", user.Callsign, originalCallsign)
 				goto authenticated
 			}
 		default:
@@ -114,14 +116,14 @@ func HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 authenticated:
-	session := aprs.GetSessionsManager().EnsureSession(user.Callsign)
+	session := aprs.GetSessionsManager().EnsureSession(originalCallsign)
 	session.AttachWebSocket(conn)
 	defer session.DetachWebSocket(conn)
 
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			log.Printf("WebSocket read failed for user %s: %v", user.Callsign, err)
+			log.Printf("WebSocket read failed for user %s: %v", originalCallsign, err)
 			break
 		}
 
@@ -133,7 +135,7 @@ authenticated:
 
 		switch req.Action {
 		case "send_message":
-			handleSendMessage(conn, user.Callsign, req)
+			handleSendMessage(conn, originalCallsign, req)
 		default:
 			sendResponse(conn, false, "Unknown action.")
 		}
