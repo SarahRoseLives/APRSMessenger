@@ -11,6 +11,8 @@ class RecentContact {
   final bool unread;
   final List<RouteHop>? route; // <--- ADDED
 
+  final String? lastReceivedMessageId; // ID of the last message we got from them
+
   RecentContact({
     required this.groupingId,
     required this.callsign,
@@ -20,6 +22,7 @@ class RecentContact {
     required this.messages,
     required this.unread,
     this.route,
+    this.lastReceivedMessageId,
   });
 
   RecentContact copyWith({
@@ -31,6 +34,7 @@ class RecentContact {
     List<ChatMessage>? messages,
     bool? unread,
     List<RouteHop>? route,
+    String? lastReceivedMessageId,
   }) {
     return RecentContact(
       groupingId: groupingId ?? this.groupingId,
@@ -41,6 +45,7 @@ class RecentContact {
       messages: messages ?? this.messages,
       unread: unread ?? this.unread,
       route: route ?? this.route,
+      lastReceivedMessageId: lastReceivedMessageId ?? this.lastReceivedMessageId,
     );
   }
 }

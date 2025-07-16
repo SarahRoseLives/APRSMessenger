@@ -60,10 +60,13 @@ class _ChatScreenState extends State<ChatScreen> {
         // Determine the other party's base callsign from the incoming message
         final otherPartyBaseCallsign = (fromMe ? to : from).split('-').first;
 
+        // --- FIX: Always extract messageId and use for de-duplication and ChatMessage ---
+        final messageId = msg['messageId']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString();
+
         // Check if the message belongs to this conversation group
         if (otherPartyBaseCallsign == widget.contact.groupingId) {
-          if (_messages.any((m) => m.text == msg["message"] && m.fromMe == fromMe)) {
-            return; // Avoid duplicates
+          if (_messages.any((m) => m.messageId == messageId)) {
+            return; // Avoid duplicates based on unique messageId
           }
           setState(() {
             // If the message is from the other party, update our reply addresses
@@ -72,6 +75,7 @@ class _ChatScreenState extends State<ChatScreen> {
               _currentOwnCallsign = to;
             }
             _messages.add(ChatMessage(
+              messageId: messageId,
               fromMe: fromMe,
               text: msg["message"] ?? "",
               time: _formatTime(msg["created_at"]),
@@ -94,7 +98,14 @@ class _ChatScreenState extends State<ChatScreen> {
         message: text,
         fromCallsign: _currentOwnCallsign);
 
-    final sentMessage = ChatMessage(fromMe: true, text: text, time: _currentTime());
+    final tempMessageId = DateTime.now().millisecondsSinceEpoch.toString();
+
+    final sentMessage = ChatMessage(
+      messageId: tempMessageId,
+      fromMe: true,
+      text: text,
+      time: _currentTime(),
+    );
     setState(() {
       _messages.add(sentMessage);
       // The home screen will get the authoritative update via websocket echo.

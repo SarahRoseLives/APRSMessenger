@@ -52,13 +52,22 @@ func ParseMessagePacket(line string) (*MessagePacket, error) {
 		packet.Path = strings.Split(pathStr, ",")
 	}
 
-	// 0. User message: :TARGET   :message
-	// Must start with colon, then exactly 9 chars, then colon, then text
+	// 0. User message: :TARGET   :message or :TARGET   :message{NN}
 	userMsgRe := regexp.MustCompile(`^:([A-Za-z0-9 \-]{9}):(.*)$`)
 	if m := userMsgRe.FindStringSubmatch(info); m != nil {
 		packet.Addressee = strings.TrimRight(m[1], " ")
-		packet.MessageText = strings.TrimSpace(m[2])
+		body := strings.TrimSpace(m[2])
+		// Try to extract trailing {NN} (classic format)
+		msgWithIdRe := regexp.MustCompile(`^(.*)\{([A-Za-z0-9]{2,5})}$`)
+		if m2 := msgWithIdRe.FindStringSubmatch(body); m2 != nil {
+			packet.Format = "message"
+			packet.MessageText = strings.TrimSpace(m2[1])
+			packet.MsgNo = m2[2]
+			return packet, nil
+		}
+		// Otherwise, regular message
 		packet.Format = "message"
+		packet.MessageText = body
 		return packet, nil
 	}
 

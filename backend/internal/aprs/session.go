@@ -141,6 +141,15 @@ func (s *Session) BroadcastMessage(from, to, msg string, path []string, exclude 
 	}
 }
 
+// SendAll sends an arbitrary payload to all attached websockets (used for status/retry notifications)
+func (s *Session) SendAll(payload map[string]interface{}) {
+	s.wsMu.Lock()
+	defer s.wsMu.Unlock()
+	for ws := range s.wsClients {
+		_ = ws.WriteJSON(payload)
+	}
+}
+
 // deliverHistory sends the full conversation history to the websocket and marks
 // any new incoming messages as delivered.
 func (s *Session) deliverHistory(ws *websocket.Conn) {

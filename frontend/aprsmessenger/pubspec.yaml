@@ -40,6 +40,7 @@ dependencies:
   mobile_scanner: ^5.1.1
   flutter_map: ^6.1.0
   latlong2: ^0.9.0
+  flutter_launcher_icons: ^0.13.1
 
 dev_dependencies:
   flutter_test:
@@ -62,6 +63,10 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+flutter_icons:
+  android: true
+  image_path: "assets/icon.png"
 
   # To add assets to your application, add an assets section, like this:
   # assets:

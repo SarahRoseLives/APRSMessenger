@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"aprsmessenger-gateway/internal/aprs"
 	"aprsmessenger-gateway/internal/db"
@@ -15,6 +17,50 @@ import (
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// --- BEGIN MESSAGE STATE TRACKING STRUCTS ---
+
+// MessageState holds the state for a message in a conversation.
+type MessageState struct {
+	LastSentMsgId     string         // The last message ID sent (by us)
+	LastReceivedMsgId string         // The last message ID received (from their side)
+	SentMsgRetryCount map[string]int // messageId -> retry count (for received duplicates)
+	Mutex             sync.Mutex
+}
+
+// ConversationState tracks state for each user/conversation.
+var conversationStates = struct {
+	sync.RWMutex
+	m map[string]map[string]*MessageState // myCallsign -> otherCallsign -> *MessageState
+}{m: make(map[string]map[string]*MessageState)}
+
+// Utility for getting message state for a conversation.
+func getOrCreateMessageState(myCall, otherCall string) *MessageState {
+	conversationStates.Lock()
+	defer conversationStates.Unlock()
+	if conversationStates.m[myCall] == nil {
+		conversationStates.m[myCall] = make(map[string]*MessageState)
+	}
+	if conversationStates.m[myCall][otherCall] == nil {
+		conversationStates.m[myCall][otherCall] = &MessageState{
+			SentMsgRetryCount: make(map[string]int),
+		}
+	}
+	return conversationStates.m[myCall][otherCall]
+}
+
+// Utility for generating the next message ID (rolling 2 digits, 00-99).
+func nextMessageId(last string) string {
+	if last == "" {
+		return "01"
+	}
+	var n int
+	fmt.Sscanf(last, "%02d", &n)
+	n = (n + 1) % 100
+	return fmt.Sprintf("%02d", n)
+}
+
+// --- END MESSAGE STATE TRACKING STRUCTS ---
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
@@ -154,24 +200,49 @@ func handleSendMessage(conn *websocket.Conn, fromCallsign, baseUserCallsign stri
 		return
 	}
 
-	log.Printf("[WS] Queuing message from %s to %s", fromCallsign, toCallsign)
-	err := aprs.GetAPRSManager().SendMessage(fromCallsign, toCallsign, req.Message)
+	// Stateful message ID and REPLY-ACK tracking
+	state := getOrCreateMessageState(baseUserCallsign, toCallsign)
+	state.Mutex.Lock()
+	nextMsgId := nextMessageId(state.LastSentMsgId)
+	lastReceivedId := state.LastReceivedMsgId
+	state.LastSentMsgId = nextMsgId
+	state.Mutex.Unlock()
+
+	// Compose APRS payload: MSG{MM}AA (text with {msgId}ackId)
+	aprsPayload := req.Message
+	if lastReceivedId != "" {
+		aprsPayload = fmt.Sprintf("%s{%s}%s", req.Message, nextMsgId, lastReceivedId)
+	} else {
+		aprsPayload = fmt.Sprintf("%s{%s}", req.Message, nextMsgId)
+	}
+
+	log.Printf("[WS] Queuing message from %s to %s with id %s, REPLY-ACK=%s", fromCallsign, toCallsign, nextMsgId, lastReceivedId)
+	err := aprs.GetAPRSManager().SendMessage(fromCallsign, toCallsign, aprsPayload)
 
 	if err != nil {
 		sendErrorResponse(conn, "Failed to send message: "+err.Error())
 		log.Printf("[APRS] Error sending message from %s: %v", fromCallsign, err)
 	} else {
 		// Store the sent message for history.
-		if storeErr := db.StoreMessage(toCallsign, fromCallsign, req.Message); storeErr != nil {
+		if storeErr := db.StoreMessage(toCallsign, fromCallsign, aprsPayload); storeErr != nil {
 			log.Printf("[DB] Failed to store sent message for history from %s: %v", fromCallsign, storeErr)
 		}
 
+		// Echo back to sender: status=sending (immediately after sending to network)
+		echo := map[string]interface{}{
+			"type":               "message_status_update",
+			"contact_groupingId": toCallsign,
+			"messageId":          nextMsgId,
+			"status":             "sent", // Could be "sending" if you want an intermediate step
+			"retryCount":         0,
+			"time":               time.Now().Format(time.RFC3339),
+		}
+		_ = conn.WriteJSON(echo)
+
 		// Broadcast the sent message to the user's other clients for synchronization.
 		if session := aprs.GetSessionsManager().GetSession(baseUserCallsign); session != nil {
-            // For the echo back to the sender, create a simplified representation of the path.
-            // The actual path will be parsed when the packet is heard back from APRS-IS.
 			echoRoute := []string{"APRS", "K8SDR-10"}
-			session.BroadcastMessage(fromCallsign, toCallsign, req.Message, echoRoute, conn)
+			session.BroadcastMessage(fromCallsign, toCallsign, aprsPayload, echoRoute, conn)
 		}
 	}
 }

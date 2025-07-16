@@ -143,6 +143,9 @@ class _HomeScreenState extends State<HomeScreen> {
         final ownCallsignForChat = fromMe ? from : to;
         final groupingKey = contactCallsign.split('-').first;
 
+        // Extract messageId for ChatMessage
+        final messageId = msg['messageId']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString();
+
         int idx = recents.indexWhere((c) => c.groupingId == groupingKey);
         if (idx == -1) {
           recents.add(RecentContact(
@@ -153,7 +156,10 @@ class _HomeScreenState extends State<HomeScreen> {
             time: _formatTime(createdAt),
             messages: [
               ChatMessage(
-                  fromMe: fromMe, text: text, time: _displayTime(createdAt)),
+                  messageId: messageId,
+                  fromMe: fromMe,
+                  text: text,
+                  time: _displayTime(createdAt)),
             ],
             unread: !fromMe && !isHistory,
             route: routeHops,
@@ -161,6 +167,7 @@ class _HomeScreenState extends State<HomeScreen> {
           idx = recents.length - 1;
         } else {
           recents[idx].messages.add(ChatMessage(
+                messageId: messageId,
                 fromMe: fromMe,
                 text: text,
                 time: _displayTime(createdAt),
@@ -224,6 +231,9 @@ class _HomeScreenState extends State<HomeScreen> {
     if (text.isEmpty || selectedIndex == null) return;
     final contact = recents[selectedIndex!];
 
+    // Generate a temp messageId for outgoing messages
+    final tempMessageId = DateTime.now().millisecondsSinceEpoch.toString();
+
     _socketService.sendMessage(
         toCallsign: contact.callsign,
         message: text,
@@ -231,6 +241,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       recents[selectedIndex!].messages.add(
             ChatMessage(
+              messageId: tempMessageId,
               fromMe: true,
               text: text,
               time: _currentTime(),

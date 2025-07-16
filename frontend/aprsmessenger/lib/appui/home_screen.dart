@@ -88,7 +88,11 @@ class _HomeScreenState extends State<HomeScreen> {
         final ownCallsignForChat = fromMe ? from : to;
         final groupingKey = otherPartyCallsign.split('-').first;
 
+        // --- FIX: Ensure messageId is always present ---
+        final messageId = msg['messageId']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString();
+
         final newMessage = ChatMessage(
+          messageId: messageId,
           fromMe: fromMe,
           text: text,
           time: _formatTime(createdAt),
@@ -115,8 +119,8 @@ class _HomeScreenState extends State<HomeScreen> {
           // --- MODIFICATION START ---
           // **DE-DUPLICATION**: Check if we already have this message.
           if (contact.messages.any((m) =>
-              m.text == newMessage.text && m.time == newMessage.time)) {
-            return; // Skip duplicate message
+              m.messageId == newMessage.messageId)) {
+            return; // Skip duplicate message based on messageId
           }
           // --- MODIFICATION END ---
 

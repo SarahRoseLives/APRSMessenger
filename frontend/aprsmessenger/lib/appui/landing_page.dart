@@ -185,24 +185,30 @@ class _LandingPageState extends State<LandingPage> {
                 style: TextStyle(color: Colors.grey.shade700, fontSize: 17),
               ),
               const SizedBox(height: 24),
-              ToggleButtons(
-                isSelected: [!isRegister, isRegister],
-                onPressed: (i) => setState(() {
-                  isRegister = i == 1;
-                  errorMsg = null;
-                }),
-                borderRadius: BorderRadius.circular(10),
-                fillColor: theme.colorScheme.primary,
-                selectedColor: Colors.white,
-                color: theme.colorScheme.primary,
-                constraints: const BoxConstraints(minHeight: 40.0),
-                children: const [
-                  Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 16),
-                      child: Text("Login")),
-                  Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 16),
-                      child: Text("Register")),
+              // Center the toggle using a Row with MainAxisAlignment.center
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ToggleButtons(
+                    isSelected: [!isRegister, isRegister],
+                    onPressed: (i) => setState(() {
+                      isRegister = i == 1;
+                      errorMsg = null;
+                    }),
+                    borderRadius: BorderRadius.circular(10),
+                    fillColor: theme.colorScheme.primary,
+                    selectedColor: Colors.white,
+                    color: theme.colorScheme.primary,
+                    constraints: const BoxConstraints(minHeight: 40.0),
+                    children: const [
+                      Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 16),
+                          child: Text("Login")),
+                      Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 16),
+                          child: Text("Register")),
+                    ],
+                  ),
                 ],
               ),
               const SizedBox(height: 24),
