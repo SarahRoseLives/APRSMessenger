@@ -204,6 +204,15 @@ func (am *APRSManager) run() {
                         log.Printf("[APRS] Failed to store message for %s: %v", msg.Addressee, err)
                     }
 
+                    // Always send APRS ack packet for compatibility if we got a message with a msgId
+                    if msgId != "" {
+                        ackPayload := fmt.Sprintf("ack%s", msgId)
+                        // Print the raw ACK packet for visibility
+                        log.Printf("[APRS RAW PACKET] %s", fmt.Sprintf("%s>%s::%s:%s",
+                            msg.Addressee, "APRS,K8SDR*,qAC,K8SDR-10", fmt.Sprintf("%-9s", strings.ToUpper(msg.Source)), ackPayload))
+                        am.SendMessage(msg.Addressee, msg.Source, ackPayload)
+                    }
+
                     session := GetSessionsManager().GetSession(baseDest)
                     if session != nil {
                         // Only log if we are actually forwarding to a client (online)
@@ -242,15 +251,6 @@ func (am *APRSManager) run() {
                                 }
                                 session.SendAll(statusUpdate)
                             }
-                        }
-
-                        // Always send APRS ack packet for compatibility if we got a message with a msgId
-                        if msgId != "" {
-                            ackPayload := fmt.Sprintf("ack%s", msgId)
-                            // Print the raw ACK packet for visibility (redundant, but for clarity here)
-                            log.Printf("[APRS RAW PACKET] %s", fmt.Sprintf("%s>%s::%s:%s",
-                                msg.Addressee, "APRS,K8SDR*,qAC,K8SDR-10", fmt.Sprintf("%-9s", strings.ToUpper(msg.Source)), ackPayload))
-                            am.SendMessage(msg.Addressee, msg.Source, ackPayload)
                         }
                     }
                 }
