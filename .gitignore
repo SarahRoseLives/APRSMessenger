@@ -1,0 +1,32 @@
+# Build artifacts
+aprsmessenger-gateway
+aprsmessenger-gateway-test
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.swp
+*.bak
+
+# Data directory (may contain user data)
+data/
