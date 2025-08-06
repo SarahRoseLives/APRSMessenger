@@ -29,6 +29,6 @@ func main() {
 
 	http.HandleFunc("/ws", ws.HandleWebSocket)
 
-	log.Println("Server started on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Println("Server started on :8585")
+	log.Fatal(http.ListenAndServe(":8585", nil))
 }

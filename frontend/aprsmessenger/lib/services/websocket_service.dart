@@ -16,10 +16,8 @@ class WebSocketService with ChangeNotifier {
   /// The public stream of messages for the UI.
   Stream<dynamic> get messages => _messageStreamController.stream;
 
-  // --- MODIFICATION START ---
   /// Public cache to hold all received messages, preventing loss before UI listens.
   final List<dynamic> messageCache = [];
-  // --- MODIFICATION END ---
 
   SocketStatus _status = SocketStatus.disconnected;
   SocketStatus get status => _status;
@@ -32,7 +30,7 @@ class WebSocketService with ChangeNotifier {
 
   String? sessionToken; // For web to show QR code
 
-  /// Connects to the WebSocket server and handles the login handshake.
+  /// Connects using secure WebSocket (wss) ONLY.
   Future<bool> connect(
     String callsign,
     String password, {
@@ -47,30 +45,26 @@ class WebSocketService with ChangeNotifier {
     final loginCompleter = Completer<Map<String, dynamic>>();
 
     try {
-      final uri = Uri.parse('ws://192.168.1.240:8080/ws');
+      final uri = Uri.parse('ws://localhost:8585/ws');
+//      final uri = Uri.parse('wss://aprs.chat/ws');
       _channel = WebSocketChannel.connect(uri);
 
-      // The service listens to the socket immediately and permanently (until disconnect).
       _socketSubscription = _channel!.stream.listen(
         (data) {
           try {
             final msg = jsonDecode(data);
-            // Check if this is the login response we are waiting for.
             if (!loginCompleter.isCompleted &&
                 msg is Map &&
                 msg.containsKey('success')) {
               loginCompleter.complete(Map<String, dynamic>.from(msg));
             } else {
-              // --- MODIFICATION START ---
-              // Add to cache for future listeners and to stream for current listeners.
               messageCache.add(data);
               _messageStreamController.add(data);
-              // --- MODIFICATION END ---
             }
           } catch (e) {
             debugPrint("WebSocket message parse error: $e");
             if (!loginCompleter.isCompleted) {
-                loginCompleter.completeError("Invalid message format from server.");
+              loginCompleter.completeError("Invalid message format from server.");
             }
           }
         },
@@ -86,7 +80,6 @@ class WebSocketService with ChangeNotifier {
         cancelOnError: true,
       );
 
-      // Send the appropriate action (register or login)
       final payload = {
         "action": passcode != null ? "create_account" : "login",
         "callsign": _callsign,
@@ -95,7 +88,6 @@ class WebSocketService with ChangeNotifier {
       };
       _sendJson(payload);
 
-      // Wait for the login response with a timeout.
       final loginMsg = await loginCompleter.future.timeout(
         const Duration(seconds: 10),
         onTimeout: () {
@@ -105,19 +97,20 @@ class WebSocketService with ChangeNotifier {
 
       if (loginMsg['success'] == true) {
         _updateStatus(SocketStatus.connected);
-        sessionToken = loginMsg['session_token']; // Store the token
+        sessionToken = loginMsg['session_token'];
         return true;
       } else {
         _handleError(loginMsg['error'] ?? "Authentication failed.");
         return false;
       }
     } catch (e) {
-      _handleError("Failed to connect: $e");
+      debugPrint("WebSocket connect error: $e");
+      _handleError("Failed to connect using wss.");
       return false;
     }
   }
 
-  /// Connects using a session token from the web QR code.
+  /// Connects using a session token from the web QR code (secure socket ONLY).
   Future<bool> connectWithToken(String token) async {
     if (_status == SocketStatus.connected || _status == SocketStatus.connecting) {
       return _status == SocketStatus.connected;
@@ -127,7 +120,7 @@ class WebSocketService with ChangeNotifier {
     final loginCompleter = Completer<Map<String, dynamic>>();
 
     try {
-      final uri = Uri.parse('ws://192.168.1.240:8080/ws');
+      final uri = Uri.parse('wss://aprs.chat/ws');
       _channel = WebSocketChannel.connect(uri);
 
       _socketSubscription = _channel!.stream.listen(
@@ -139,16 +132,12 @@ class WebSocketService with ChangeNotifier {
                 msg.containsKey('success')) {
               loginCompleter.complete(Map<String, dynamic>.from(msg));
             } else {
-              // --- MODIFICATION START ---
-              // Also apply the same caching logic for token login
               messageCache.add(data);
               _messageStreamController.add(data);
-              // --- MODIFICATION END ---
             }
           } catch (e) {
             if (!loginCompleter.isCompleted) {
-              loginCompleter
-                  .completeError("Invalid message format from server.");
+              loginCompleter.completeError("Invalid message format from server.");
             }
           }
         },
@@ -182,7 +171,8 @@ class WebSocketService with ChangeNotifier {
         return false;
       }
     } catch (e) {
-      _handleError("Failed to connect with token: $e");
+      debugPrint("WebSocket connect error: $e");
+      _handleError("Failed to connect using wss.");
       return false;
     }
   }

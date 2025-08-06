@@ -25,7 +25,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<RecentContact> recents = [];
   int? selectedIndex;
   final TextEditingController _chatController = TextEditingController();
-  final ScrollController _chatScrollController = ScrollController(); // ADDED
+  final ScrollController _chatScrollController = ScrollController();
 
   bool _gotLoginResponse = false;
   String? _loginError;
@@ -41,7 +41,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_streamSubscription == null) {
       _socketService = Provider.of<WebSocketService>(context);
 
-      // Process all messages from the cache that arrived before this screen was ready.
+      // Process messages from cache before screen was ready.
       for (final raw in _socketService.messageCache) {
         _onNewMessage(raw);
       }
@@ -68,7 +68,6 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       return;
     }
-
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -102,6 +101,12 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
+  }
+
+  /// LOGOUT BUTTON HANDLER
+  void _logout() {
+    _socketService.disconnect();
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   void _onNewMessage(dynamic raw) {
@@ -208,17 +213,15 @@ class _HomeScreenState extends State<HomeScreen> {
     _streamSubscription?.cancel();
     _socketService.removeListener(_handleConnectionChange);
     _chatController.dispose();
-    _chatScrollController.dispose(); // MODIFIED
+    _chatScrollController.dispose();
     super.dispose();
   }
 
-  // ADDED: Method to scroll chat to the bottom
   void _scrollToBottom() {
-    // A small delay ensures the ListView has rebuilt before we scroll.
     Future.delayed(const Duration(milliseconds: 50), () {
       if (_chatScrollController.hasClients) {
         _chatScrollController.animateTo(
-          0.0, // With a reversed list, the bottom is at offset 0.0
+          0.0,
           duration: const Duration(milliseconds: 250),
           curve: Curves.easeOut,
         );
@@ -231,7 +234,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (text.isEmpty || selectedIndex == null) return;
     final contact = recents[selectedIndex!];
 
-    // Generate a temp messageId for outgoing messages
     final tempMessageId = DateTime.now().millisecondsSinceEpoch.toString();
 
     _socketService.sendMessage(
@@ -252,11 +254,10 @@ class _HomeScreenState extends State<HomeScreen> {
         time: DateTime.now().toIso8601String(),
         unread: false,
       );
-      // Sort by time
       recents.sort((a, b) => b.time.compareTo(a.time));
       _chatController.clear();
     });
-    _scrollToBottom(); // MODIFIED
+    _scrollToBottom();
   }
 
   void _showNewMessageDialog() {
@@ -306,7 +307,6 @@ class _HomeScreenState extends State<HomeScreen> {
         recents.indexWhere((c) => c.groupingId == groupingKey);
 
     if (existingIndex != -1) {
-      // Chat already exists, just select it.
       setState(() {
         selectedIndex = existingIndex;
         if (recents[existingIndex].unread) {
@@ -315,7 +315,6 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       });
     } else {
-      // Create a new, temporary contact to start the chat
       final newContact = RecentContact(
         groupingId: groupingKey,
         callsign: callsign,
@@ -323,15 +322,13 @@ class _HomeScreenState extends State<HomeScreen> {
         lastMessage: "No messages yet.",
         time: DateTime.now().toIso8601String(),
         unread: false,
-        messages: [], // Empty message list
+        messages: [],
         route: null,
       );
 
       setState(() {
         recents.add(newContact);
-        // Sort to bring the new contact to the top
         recents.sort((a, b) => b.time.compareTo(a.time));
-        // Find its new index and select it
         selectedIndex = recents.indexWhere((c) => c.groupingId == groupingKey);
       });
     }
@@ -372,7 +369,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_loginError != null) {
       return Scaffold(
         appBar: AppBar(
-          title: const Text("APRS Messenger"),
+          title: const Text("APRS.Chat"),
         ),
         body: Center(
           child: Column(
@@ -410,7 +407,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   size: 28, color: theme.colorScheme.primary),
               const SizedBox(width: 12),
               Text(
-                "APRS Messenger",
+                "APRS.Chat",
                 style: TextStyle(
                   color: theme.colorScheme.primary,
                   fontWeight: FontWeight.bold,
@@ -450,12 +447,20 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             Padding(
-              padding: const EdgeInsets.only(right: 24.0),
+              padding: const EdgeInsets.only(right: 8.0),
               child: IconButton(
                 tooltip: "Login on Mobile",
                 icon: Icon(Icons.qr_code,
                     color: Colors.teal.shade700, size: 28),
                 onPressed: _showQrCode,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(right: 24.0),
+              child: IconButton(
+                tooltip: "Logout",
+                icon: Icon(Icons.logout, color: Colors.grey.shade700, size: 28),
+                onPressed: _logout,
               ),
             ),
           ],
@@ -527,7 +532,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   selectedIndex = i;
                                   recents[i] = c.copyWith(unread: false);
                                 });
-                                _scrollToBottom(); // MODIFIED
+                                _scrollToBottom();
                               },
                             );
                           },
@@ -638,14 +643,13 @@ class _HomeScreenState extends State<HomeScreen> {
                               Expanded(
                                 child: ListView.builder(
                                   controller:
-                                      _chatScrollController, // MODIFIED
-                                  reverse: true, // MODIFIED
+                                      _chatScrollController,
+                                  reverse: true,
                                   padding: const EdgeInsets.symmetric(
                                       vertical: 16, horizontal: 16),
                                   itemCount:
                                       recents[selectedIndex!].messages.length,
                                   itemBuilder: (context, i) {
-                                    // MODIFIED: Access items in reverse for the reversed ListView
                                     final index = recents[selectedIndex!]
                                             .messages
                                             .length -
@@ -702,12 +706,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                 padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
                                 child: SizedBox(
                                   height:
-                                      200, // Increased height for better map view
+                                      200,
                                   child: MessageRouteMap(
                                     route:
                                         recents[selectedIndex!].route ?? [],
                                     contact: recents[selectedIndex!].callsign,
-                                    // The `horizontal` parameter is no longer needed.
                                   ),
                                 ),
                               ),

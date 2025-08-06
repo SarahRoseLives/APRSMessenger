@@ -7,7 +7,7 @@ class APRSMessengerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'APRS Messenger',
+      title: 'APRS.Chat',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.light(
@@ -125,7 +125,7 @@ class _MessengerScreenState extends State<MessengerScreen> {
               Icon(Icons.message_rounded, size: 28, color: theme.colorScheme.primary),
               const SizedBox(width: 12),
               Text(
-                "APRS Messenger",
+                "APRS.Chat",
                 style: TextStyle(
                   color: theme.colorScheme.primary,
                   fontWeight: FontWeight.bold,
@@ -315,7 +315,7 @@ class _MessengerScreenState extends State<MessengerScreen> {
                                   Icon(Icons.message_rounded, color: theme.colorScheme.primary.withOpacity(0.4), size: 56),
                                   const SizedBox(height: 24),
                                   Text(
-                                    "Welcome to APRS Messenger",
+                                    "Welcome to APRS.Chat",
                                     style: TextStyle(
                                       fontSize: 23,
                                       color: theme.colorScheme.primary,

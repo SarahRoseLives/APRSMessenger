@@ -119,7 +119,7 @@ class _LandingPageState extends State<LandingPage> {
                             Icon(Icons.message_rounded, size: 54, color: theme.colorScheme.primary),
                             const SizedBox(width: 20),
                             Text(
-                              "APRS Messenger",
+                              "APRS.Chat",
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 fontSize: 38,
@@ -140,8 +140,8 @@ class _LandingPageState extends State<LandingPage> {
                         ),
                         const SizedBox(height: 22),
                         Text(
-                          "APRS Messenger lets you send and receive APRS messages globally, instantly. "
-                          "Whether you're a ham operator, a rescue volunteer, or an experimenter, our service brings the power of real-time radio messaging to your fingertips — anywhere, anytime.",
+                          "APRS.Chat lets you send and receive APRS messages globally, instantly. "
+                          "While you're offline, it'll queue up messages into your inbox, so you'll never miss a message ever again.",
                           style: TextStyle(
                             fontSize: 20,
                             color: theme.colorScheme.onSurface.withOpacity(0.8),
@@ -154,7 +154,7 @@ class _LandingPageState extends State<LandingPage> {
                             Icon(Icons.public, color: theme.colorScheme.primary),
                             const SizedBox(width: 10),
                             Text(
-                              "Secure • Fast • Community Driven",
+                              "Open • Free • Community Driven",
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600,
@@ -192,7 +192,7 @@ class _LandingPageState extends State<LandingPage> {
                                     Icon(Icons.message_rounded, size: 48, color: theme.colorScheme.primary),
                                     const SizedBox(height: 12),
                                     Text(
-                                      "APRS Messenger",
+                                      "APRS.Chat",
                                       style: TextStyle(
                                         fontWeight: FontWeight.bold,
                                         fontSize: 26,

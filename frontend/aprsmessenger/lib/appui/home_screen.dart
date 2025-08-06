@@ -268,7 +268,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("APRS Messenger"),
+        title: const Text("APRS.Chat"),
         actions: [
           if (isAdmin)
             IconButton(

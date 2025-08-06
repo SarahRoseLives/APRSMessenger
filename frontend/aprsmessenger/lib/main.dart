@@ -17,7 +17,7 @@ class APRSMessengerApp extends StatelessWidget {
             defaultTargetPlatform == TargetPlatform.macOS);
 
     return MaterialApp(
-      title: 'APRS Messenger',
+      title: 'APRS.Chat',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.light(

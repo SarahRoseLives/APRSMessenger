@@ -170,7 +170,7 @@ class _LandingPageState extends State<LandingPage> {
                   size: 64, color: theme.colorScheme.primary),
               const SizedBox(height: 18),
               Text(
-                "APRS Messenger",
+                "APRS.Chat",
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
