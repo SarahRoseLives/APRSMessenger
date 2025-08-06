@@ -10,6 +10,8 @@ import '../widgets/chat_bubble.dart';
 import '../widgets/contact_tile.dart';
 import '../widgets/message_route_map.dart';
 import 'admin_panel_screen.dart';
+// Import your landing page. Replace with actual import if needed.
+import 'landing_page.dart'; // <-- Make sure this is the correct path
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -41,7 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_streamSubscription == null) {
       _socketService = Provider.of<WebSocketService>(context);
 
-      // Process messages from cache before screen was ready.
+      // Process all messages from the cache that arrived before this screen was ready.
       for (final raw in _socketService.messageCache) {
         _onNewMessage(raw);
       }
@@ -68,6 +70,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       return;
     }
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -106,7 +109,11 @@ class _HomeScreenState extends State<HomeScreen> {
   /// LOGOUT BUTTON HANDLER
   void _logout() {
     _socketService.disconnect();
-    Navigator.of(context).popUntil((route) => route.isFirst);
+    // Replace with your actual landing page route.
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (context) => const LandingPage()), // Replace LandingPage with your landing page widget
+      (route) => false,
+    );
   }
 
   void _onNewMessage(dynamic raw) {
