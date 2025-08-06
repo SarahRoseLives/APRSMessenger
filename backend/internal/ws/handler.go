@@ -68,14 +68,15 @@ var upgrader = websocket.Upgrader{
 
 // WSRequest defines the structure for all incoming websocket actions.
 type WSRequest struct {
-	Action       string `json:"action"`
-	Callsign     string `json:"callsign,omitempty"`
-	Password     string `json:"password,omitempty"`
-	Passcode     string `json:"passcode,omitempty"`
-	Token        string `json:"token,omitempty"` // For QR code login
-	ToCallsign   string `json:"to_callsign,omitempty"`
-	Message      string `json:"message,omitempty"`
-	FromCallsign string `json:"from_callsign,omitempty"`
+	Action          string `json:"action"`
+	Callsign        string `json:"callsign,omitempty"`
+	Password        string `json:"password,omitempty"`
+	Passcode        string `json:"passcode,omitempty"`
+	Token           string `json:"token,omitempty"` // For QR code login
+	ToCallsign      string `json:"to_callsign,omitempty"`
+	Message         string `json:"message,omitempty"`
+	FromCallsign    string `json:"from_callsign,omitempty"`
+	CallsignToBlock string `json:"callsign_to_block,omitempty"`
 }
 
 // WSResponse is a flexible map for sending responses back to the client.
@@ -182,6 +183,14 @@ authenticated:
 				fromCallsign = req.FromCallsign
 			}
 			handleSendMessage(conn, fromCallsign, baseUserCallsign, req)
+		case "delete_conversation":
+			handleDeleteConversation(conn, user.Callsign, req)
+		case "block_callsign":
+			handleBlockCallsign(conn, user.ID, req)
+		case "request_data_export":
+			handleRequestDataExport(conn, user.Callsign)
+		case "delete_account":
+			handleDeleteAccount(conn, user, req)
 		default:
 			sendErrorResponse(conn, "Unknown action.")
 		}
@@ -326,6 +335,62 @@ func handleCreateAccount(conn *websocket.Conn, req WSRequest) {
 	}
 	sendSuccessResponse(conn, nil)
 	log.Printf("Account created for callsign: %s", callsign)
+}
+
+func handleDeleteConversation(conn *websocket.Conn, userCallsign string, req WSRequest) {
+	contactCallsign := cleanCallsign(req.ToCallsign)
+	if contactCallsign == "" {
+		sendErrorResponse(conn, "Invalid contact callsign provided for deletion.")
+		return
+	}
+	err := db.DeleteConversation(userCallsign, contactCallsign)
+	if err != nil {
+		log.Printf("[DB] Error deleting conversation for %s with %s: %v", userCallsign, contactCallsign, err)
+		sendErrorResponse(conn, "Failed to delete conversation.")
+	} else {
+		log.Printf("[WS] Deleted conversation for %s with %s", userCallsign, contactCallsign)
+		_ = conn.WriteJSON(WSResponse{"type": "conversation_deleted", "contact": contactCallsign})
+	}
+}
+
+func handleBlockCallsign(conn *websocket.Conn, userID int, req WSRequest) {
+	callsignToBlock := cleanCallsign(req.CallsignToBlock)
+	if !validCallsign(callsignToBlock) {
+		sendErrorResponse(conn, "Invalid callsign format for blocking.")
+		return
+	}
+	err := db.BlockCallsign(userID, callsignToBlock)
+	if err != nil {
+		log.Printf("[DB] Error blocking callsign for user %d: %v", userID, err)
+		sendErrorResponse(conn, "Failed to block callsign.")
+	} else {
+		log.Printf("[WS] User %d blocked %s", userID, callsignToBlock)
+		_ = conn.WriteJSON(WSResponse{"type": "callsign_blocked", "contact": callsignToBlock})
+	}
+}
+
+func handleRequestDataExport(conn *websocket.Conn, callsign string) {
+	data, err := db.ExportDataForUser(callsign)
+	if err != nil {
+		log.Printf("[WS] Failed to export data for %s: %v", callsign, err)
+		sendErrorResponse(conn, "Failed to export data.")
+		return
+	}
+	_ = conn.WriteJSON(WSResponse{"type": "data_export", "data": data})
+}
+
+func handleDeleteAccount(conn *websocket.Conn, user *models.User, req WSRequest) {
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.Password)); err != nil {
+		sendErrorResponse(conn, "Incorrect password. Account not deleted.")
+		return
+	}
+	if err := db.DeleteUserAndData(user.ID); err != nil {
+		log.Printf("[DB] Failed to delete account for user %d: %v", user.ID, err)
+		sendErrorResponse(conn, "Failed to delete account.")
+		return
+	}
+	log.Printf("[WS] DELETED ACCOUNT for user %s (ID: %d)", user.Callsign, user.ID)
+	_ = conn.WriteJSON(WSResponse{"type": "account_deleted", "success": true})
 }
 
 func cleanCallsign(callsign string) string {

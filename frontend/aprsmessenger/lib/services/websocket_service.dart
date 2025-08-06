@@ -193,6 +193,35 @@ class WebSocketService with ChangeNotifier {
     _sendJson(payload);
   }
 
+  void deleteConversation(String contactCallsign) {
+    if (_status != SocketStatus.connected) return;
+    _sendJson({
+      "action": "delete_conversation",
+      "to_callsign": contactCallsign,
+    });
+  }
+
+  void blockCallsign(String callsignToBlock) {
+    if (_status != SocketStatus.connected) return;
+    _sendJson({
+      "action": "block_callsign",
+      "callsign_to_block": callsignToBlock,
+    });
+  }
+
+  void requestDataExport() {
+    if (_status != SocketStatus.connected) return;
+    _sendJson({"action": "request_data_export"});
+  }
+
+  void deleteAccount(String password) {
+    if (_status != SocketStatus.connected) return;
+    _sendJson({
+      "action": "delete_account",
+      "password": password,
+    });
+  }
+
   void _sendJson(Map<String, dynamic> data) {
     if (_channel?.sink != null) {
       _channel!.sink.add(jsonEncode(data));

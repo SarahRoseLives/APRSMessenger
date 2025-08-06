@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../models/contact.dart';
 import '../models/chat_message.dart';
@@ -31,20 +32,12 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Ensures we only subscribe once
     if (_streamSubscription == null) {
       _socketService = Provider.of<WebSocketService>(context);
-
-      // --- MODIFICATION START ---
-      // Process all messages from the cache that arrived before this screen was ready.
       for (final raw in _socketService.messageCache) {
         _onNewMessage(raw);
       }
-      // --- MODIFICATION END ---
-
       _streamSubscription = _socketService.messages.listen(_onNewMessage);
-
-      // Listen for connection errors that might happen after login
       _socketService.addListener(_handleConnectionChange);
     }
   }
@@ -52,7 +45,6 @@ class _HomeScreenState extends State<HomeScreen> {
   void _handleConnectionChange() {
     if (_socketService.status == SocketStatus.error ||
         _socketService.status == SocketStatus.disconnected) {
-      // Navigate back to login if connection is lost
       if (mounted) {
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(builder: (context) => const LandingPage()),
@@ -67,6 +59,37 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final msg = jsonDecode(raw);
+
+      // --- HANDLE SPECIAL (NON-APRS) MESSAGES ---
+      if (msg is Map && msg.containsKey('type')) {
+        switch (msg['type']) {
+          case 'conversation_deleted':
+            final contact = msg['contact'];
+            setState(() {
+              recents.removeWhere((c) => c.groupingId == contact);
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text("Conversation with $contact deleted.")),
+            );
+            return;
+          case 'callsign_blocked':
+            final contact = msg['contact'];
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text("$contact has been blocked.")),
+            );
+            return;
+          case 'data_export':
+            _showDataExportDialog(msg['data']);
+            return;
+          case 'account_deleted':
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Account successfully deleted.")),
+            );
+            _logout(); // This will navigate to landing page
+            return;
+        }
+      }
+
       if (msg["aprs_msg"] == true) {
         final from = (msg["from"] as String).toUpperCase();
         final to = (msg["to"] as String).toUpperCase();
@@ -88,8 +111,8 @@ class _HomeScreenState extends State<HomeScreen> {
         final ownCallsignForChat = fromMe ? from : to;
         final groupingKey = otherPartyCallsign.split('-').first;
 
-        // --- FIX: Ensure messageId is always present ---
-        final messageId = msg['messageId']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString();
+        final messageId = msg['messageId']?.toString() ??
+            DateTime.now().millisecondsSinceEpoch.toString();
 
         final newMessage = ChatMessage(
           messageId: messageId,
@@ -101,7 +124,6 @@ class _HomeScreenState extends State<HomeScreen> {
         final idx = recents.indexWhere((c) => c.groupingId == groupingKey);
 
         if (idx == -1) {
-          // Contact group does not exist, create a new one.
           recents.add(RecentContact(
             groupingId: groupingKey,
             callsign: otherPartyCallsign,
@@ -113,28 +135,21 @@ class _HomeScreenState extends State<HomeScreen> {
             route: routeHops,
           ));
         } else {
-          // Contact group exists, update it immutably.
           final contact = recents[idx];
 
-          // --- MODIFICATION START ---
-          // **DE-DUPLICATION**: Check if we already have this message.
-          if (contact.messages.any((m) =>
-              m.messageId == newMessage.messageId)) {
-            return; // Skip duplicate message based on messageId
+          if (contact.messages.any((m) => m.messageId == newMessage.messageId)) {
+            return; // Skip duplicate
           }
-          // --- MODIFICATION END ---
 
           final updatedMessages = List<ChatMessage>.from(contact.messages)
             ..add(newMessage);
 
-          // Sort messages by time to ensure they are in order
           updatedMessages
               .sort((a, b) => (a.time ?? "").compareTo(b.time ?? ""));
 
           recents[idx] = contact.copyWith(
-            callsign: otherPartyCallsign, // Update to the latest full callsign
-            ownCallsign:
-                ownCallsignForChat, // Update our own callsign used in chat
+            callsign: otherPartyCallsign,
+            ownCallsign: ownCallsignForChat,
             lastMessage: text,
             time: _formatTime(createdAt),
             unread: (!fromMe && !isHistory) || contact.unread,
@@ -142,7 +157,6 @@ class _HomeScreenState extends State<HomeScreen> {
             route: routeHops ?? contact.route,
           );
         }
-        // Sort the recents list to bring the most recent conversations to the top
         recents.sort((a, b) => (b.time).compareTo(a.time));
         if (mounted) {
           setState(() {});
@@ -153,13 +167,156 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _logout() {
+    _socketService.disconnect();
+    Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (context) => const LandingPage()),
+        (route) => false);
+  }
+
+  void _showContactMenu(BuildContext context, RecentContact contact) {
+    showModalBottomSheet(
+      context: context,
+      builder: (BuildContext bc) {
+        return SafeArea(
+          child: Wrap(
+            children: <Widget>[
+              ListTile(
+                  leading: const Icon(Icons.delete_outline),
+                  title: const Text('Delete Conversation'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _showDeleteConversationDialog(contact);
+                  }),
+              ListTile(
+                leading: const Icon(Icons.block),
+                title: Text('Block ${contact.groupingId}'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _showBlockCallsignDialog(contact);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showDeleteConversationDialog(RecentContact contact) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Delete Conversation"),
+        content: Text(
+            "Are you sure you want to delete all messages with ${contact.groupingId}? This cannot be undone."),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text("Cancel")),
+          TextButton(
+            onPressed: () {
+              _socketService.deleteConversation(contact.callsign);
+              Navigator.of(context).pop();
+            },
+            child: const Text("Delete", style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showBlockCallsignDialog(RecentContact contact) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Block Callsign"),
+        content: Text(
+            "Are you sure you want to block ${contact.groupingId}? You will no longer receive messages from them."),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text("Cancel")),
+          TextButton(
+            onPressed: () {
+              _socketService.blockCallsign(contact.callsign);
+              Navigator.of(context).pop();
+            },
+            child: const Text("Block", style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDataExportDialog(dynamic data) {
+    // Pretty-print the JSON.
+    final prettyJson = const JsonEncoder.withIndent('  ').convert(data);
+    showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+              title: const Text("Your Data Export"),
+              content: SingleChildScrollView(child: SelectableText(prettyJson)),
+              actions: [
+                TextButton(
+                    onPressed: () =>
+                        Clipboard.setData(ClipboardData(text: prettyJson)),
+                    child: const Text("Copy to Clipboard")),
+                TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text("Close")),
+              ],
+            ));
+  }
+
+  void _showDeleteAccountDialog() {
+    final passwordController = TextEditingController();
+    showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+              title: const Text("Delete Account"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                      "This action is irreversible and will delete all your messages and account data.\n\nPlease enter your password to confirm.",
+                      style: TextStyle(color: Colors.red)),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: passwordController,
+                    obscureText: true,
+                    decoration: const InputDecoration(labelText: "Password"),
+                  )
+                ],
+              ),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text("Cancel")),
+                TextButton(
+                  onPressed: () {
+                    final password = passwordController.text;
+                    if (password.isNotEmpty) {
+                      _socketService.deleteAccount(password);
+                      Navigator.of(context).pop();
+                    }
+                  },
+                  child:
+                      const Text("DELETE", style: TextStyle(color: Colors.red)),
+                ),
+              ],
+            ));
+  }
+
   void _showNewMessageDialog() {
     final callsignController = TextEditingController();
     showDialog(
       context: context,
       builder: (context) {
         return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: const Text("New Message"),
           content: TextField(
             controller: callsignController,
@@ -172,9 +329,8 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text("Cancel"),
-            ),
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text("Cancel")),
             ElevatedButton(
               onPressed: () {
                 final String callsign =
@@ -200,17 +356,11 @@ class _HomeScreenState extends State<HomeScreen> {
     RecentContact contact;
 
     if (existingIndex != -1) {
-      // Chat already exists, use that one.
       contact = recents[existingIndex];
-      // Mark as read when navigating.
       if (contact.unread) {
         setState(() => recents[existingIndex] = contact.copyWith(unread: false));
       }
     } else {
-      // Create a new, temporary contact object to start the conversation.
-      // This object won't be added to the main 'recents' list. The ChatScreen
-      // will use it, and when the first message is sent, the websocket echo
-      // will cause the real contact to be created and added to the list.
       contact = RecentContact(
         groupingId: groupingKey,
         callsign: callsign,
@@ -223,7 +373,6 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
 
-    // Navigate to ChatScreen with the determined contact info
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ChangeNotifierProvider.value(
@@ -240,7 +389,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (isoTime == null) return "";
     final dt = DateTime.tryParse(isoTime);
     if (dt == null) return "";
-    // Return the full ISO string for accurate sorting. Display formatting is handled in the widget.
     return isoTime;
   }
 
@@ -280,20 +428,44 @@ class _HomeScreenState extends State<HomeScreen> {
                         callsign: socketService.callsign!)),
               ),
             ),
-          Padding(
-            padding: const EdgeInsets.only(right: 8.0),
-            child: IconButton(
-              icon: const Icon(Icons.logout),
-              tooltip: "Logout",
-              onPressed: () {
-                socketService.disconnect();
-                // The listener will handle navigation, but this is immediate.
-                Navigator.of(context).pushAndRemoveUntil(
-                    MaterialPageRoute(
-                        builder: (context) => const LandingPage()),
-                    (route) => false);
-              },
-            ),
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              switch (value) {
+                case 'download':
+                  socketService.requestDataExport();
+                  break;
+                case 'delete_account':
+                  _showDeleteAccountDialog();
+                  break;
+                case 'logout':
+                  _logout();
+                  break;
+              }
+            },
+            itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+              const PopupMenuItem<String>(
+                value: 'download',
+                child: ListTile(
+                  leading: Icon(Icons.download),
+                  title: Text('Download My Data'),
+                ),
+              ),
+              const PopupMenuItem<String>(
+                value: 'delete_account',
+                child: ListTile(
+                  leading: Icon(Icons.delete_forever, color: Colors.red),
+                  title: Text('Delete Account', style: TextStyle(color: Colors.red)),
+                ),
+              ),
+              const PopupMenuDivider(),
+              const PopupMenuItem<String>(
+                value: 'logout',
+                child: ListTile(
+                  leading: Icon(Icons.logout),
+                  title: Text('Logout'),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -301,14 +473,16 @@ class _HomeScreenState extends State<HomeScreen> {
         itemCount: recents.length,
         itemBuilder: (context, i) {
           final contact = recents[i];
-          return ContactTile(
-            contact: contact,
-            displayTime: _displayTime(contact.time),
-            selected: false,
-            onTap: () async {
-              // Use the _navigateToChat method to handle navigation and state updates
-              _navigateToChat(contact.callsign);
-            },
+          return GestureDetector(
+            onLongPress: () => _showContactMenu(context, contact),
+            child: ContactTile(
+              contact: contact,
+              displayTime: _displayTime(contact.time),
+              selected: false, // Mobile UI doesn't have a "selected" state in the list
+              onTap: () async {
+                _navigateToChat(contact.callsign);
+              },
+            ),
           );
         },
       ),

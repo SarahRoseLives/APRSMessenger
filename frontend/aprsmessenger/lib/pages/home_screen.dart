@@ -1,8 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+// Conditional import for dart:html
+import 'package:aprsmessenger_gateway/conditional_export.dart'
+    if (dart.library.html) 'dart:html' as html;
+
 import '../models/contact.dart';
 import '../models/chat_message.dart';
 import '../services/websocket_service.dart';
@@ -10,8 +15,7 @@ import '../widgets/chat_bubble.dart';
 import '../widgets/contact_tile.dart';
 import '../widgets/message_route_map.dart';
 import 'admin_panel_screen.dart';
-// Import your landing page. Replace with actual import if needed.
-import 'landing_page.dart'; // <-- Make sure this is the correct path
+import 'landing_page.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -43,7 +47,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_streamSubscription == null) {
       _socketService = Provider.of<WebSocketService>(context);
 
-      // Process all messages from the cache that arrived before this screen was ready.
       for (final raw in _socketService.messageCache) {
         _onNewMessage(raw);
       }
@@ -62,63 +65,44 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _showQrCode() {
-    final token = _socketService.sessionToken;
-    if (token == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Session token not available.")),
-      );
-      return;
-    }
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text("Login on Mobile App"),
-        content: SizedBox(
-          width: 250,
-          height: 250,
-          child: Center(
-            child: QrImageView(
-              data: token,
-              version: QrVersions.auto,
-              size: 220.0,
-              gapless: false,
-              eyeStyle: QrEyeStyle(
-                eyeShape: QrEyeShape.square,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              dataModuleStyle: QrDataModuleStyle(
-                dataModuleShape: QrDataModuleShape.square,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text("Close"),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// LOGOUT BUTTON HANDLER
-  void _logout() {
-    _socketService.disconnect();
-    // Replace with your actual landing page route.
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (context) => const LandingPage()), // Replace LandingPage with your landing page widget
-      (route) => false,
-    );
-  }
-
   void _onNewMessage(dynamic raw) {
     try {
       final msg = jsonDecode(raw);
+
+      // --- HANDLE SPECIAL (NON-APRS) MESSAGES ---
+      if (msg is Map && msg.containsKey('type')) {
+        switch (msg['type']) {
+          case 'conversation_deleted':
+            final contactCallsign = msg['contact'];
+            setState(() {
+              final groupingKey = contactCallsign.split('-').first;
+              final deletedIndex =
+                  recents.indexWhere((c) => c.groupingId == groupingKey);
+              if (deletedIndex != -1) {
+                if (selectedIndex == deletedIndex) {
+                  selectedIndex = null;
+                }
+                recents.removeAt(deletedIndex);
+              }
+            });
+            return;
+          case 'callsign_blocked':
+            // No UI change, just a confirmation
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text("Blocked ${msg['contact']}")),
+            );
+            return;
+          case 'data_export':
+            _handleDataExport(msg['data']);
+            return;
+          case 'account_deleted':
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text("Account successfully deleted.")),
+            );
+            _logout();
+            return;
+        }
+      }
 
       // First response from server is login response, handle error if any
       if (!_gotLoginResponse) {
@@ -155,8 +139,8 @@ class _HomeScreenState extends State<HomeScreen> {
         final ownCallsignForChat = fromMe ? from : to;
         final groupingKey = contactCallsign.split('-').first;
 
-        // Extract messageId for ChatMessage
-        final messageId = msg['messageId']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString();
+        final messageId = msg['messageId']?.toString() ??
+            DateTime.now().millisecondsSinceEpoch.toString();
 
         int idx = recents.indexWhere((c) => c.groupingId == groupingKey);
         if (idx == -1) {
@@ -193,16 +177,15 @@ class _HomeScreenState extends State<HomeScreen> {
             route: routeHops ?? recents[idx].route,
           );
         }
-        // If the message is for the currently selected chat and not from history, we should scroll.
         final bool shouldScroll = selectedIndex == idx && !isHistory;
 
-        // If not viewing this contact, set unread
         if (selectedIndex != idx && !fromMe && !isHistory) {
           recents[idx] = recents[idx].copyWith(unread: true);
         }
 
-        // Sort by time
         recents.sort((a, b) => b.time.compareTo(a.time));
+        // After sorting, the index might change, so we need to find it again
+        selectedIndex = recents.indexWhere((c) => c.groupingId == groupingKey);
 
         setState(() {});
 
@@ -213,6 +196,177 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       // Ignore parse errors
     }
+  }
+
+  void _showDeleteConversationDialog(RecentContact contact) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Delete Conversation"),
+        content: Text(
+            "Are you sure you want to delete all messages with ${contact.groupingId}? This cannot be undone."),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text("Cancel")),
+          TextButton(
+            onPressed: () {
+              _socketService.deleteConversation(contact.callsign);
+              Navigator.of(context).pop();
+            },
+            child: const Text("Delete", style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showBlockCallsignDialog(RecentContact contact) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text("Block ${contact.groupingId}"),
+        content: Text(
+            "Are you sure you want to block all messages from ${contact.groupingId}?"),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text("Cancel")),
+          TextButton(
+            onPressed: () {
+              _socketService.blockCallsign(contact.callsign);
+              Navigator.of(context).pop();
+            },
+            child: const Text("Block", style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _handleDataExport(dynamic data) {
+    final prettyJson = const JsonEncoder.withIndent('  ').convert(data);
+    // This part is web-specific. A conditional import handles the 'html' package.
+    try {
+      final blob = html.Blob([prettyJson], 'application/json');
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      final anchor = html.AnchorElement(href: url)
+        ..setAttribute("download", "aprs_chat_export.json")
+        ..click();
+      html.Url.revokeObjectUrl(url);
+    } catch (e) {
+      // Fallback for non-web platforms or if html import fails
+      showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+                title: const Text("Your Data Export"),
+                content:
+                    SingleChildScrollView(child: SelectableText(prettyJson)),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text("Close")),
+                ],
+              ));
+    }
+  }
+
+  void _showDeleteAccountDialog() {
+    final passwordController = TextEditingController();
+    showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+              title: const Text("Delete Your Account?"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                      "This is permanent. All messages and your account will be deleted.",
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 16),
+                  Text("To confirm, please enter your password for ${_socketService.callsign!}:"),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: passwordController,
+                    obscureText: true,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: 'Password',
+                    ),
+                  )
+                ],
+              ),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text("Cancel")),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                  onPressed: () {
+                    if (passwordController.text.isNotEmpty) {
+                      _socketService.deleteAccount(passwordController.text);
+                      Navigator.pop(context);
+                    }
+                  },
+                  child: const Text("Delete My Account"),
+                )
+              ],
+            ));
+  }
+
+  void _showQrCode() {
+    final token = _socketService.sessionToken;
+    if (token == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Session token not available.")),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("Login on Mobile App"),
+        content: SizedBox(
+          width: 250,
+          height: 250,
+          child: Center(
+            child: QrImageView(
+              data: token,
+              version: QrVersions.auto,
+              size: 220.0,
+              gapless: false,
+              eyeStyle: QrEyeStyle(
+                eyeShape: QrEyeShape.square,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              dataModuleStyle: QrDataModuleStyle(
+                dataModuleShape: QrDataModuleShape.square,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text("Close"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _logout() {
+    _socketService.disconnect();
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (context) => const LandingPage()),
+      (route) => false,
+    );
   }
 
   @override
@@ -289,9 +443,8 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text("Cancel"),
-            ),
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text("Cancel")),
             ElevatedButton(
               onPressed: () {
                 Navigator.of(context).pop();
@@ -372,28 +525,17 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    // If login error, show error message and a back button
     if (_loginError != null) {
       return Scaffold(
-        appBar: AppBar(
-          title: const Text("APRS.Chat"),
-        ),
+        appBar: AppBar(title: const Text("APRS.Chat")),
         body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                _loginError!,
-                style: const TextStyle(
-                    color: Colors.red,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold),
-              ),
+              Text(_loginError!, style: const TextStyle(color: Colors.red, fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 24),
               ElevatedButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                },
+                onPressed: () => Navigator.of(context).pop(),
                 child: const Text("Back"),
               ),
             ],
@@ -410,46 +552,27 @@ class _HomeScreenState extends State<HomeScreen> {
           titleSpacing: 24,
           title: Row(
             children: [
-              Icon(Icons.message_rounded,
-                  size: 28, color: theme.colorScheme.primary),
+              Icon(Icons.message_rounded, size: 28, color: theme.colorScheme.primary),
               const SizedBox(width: 12),
-              Text(
-                "APRS.Chat",
-                style: TextStyle(
-                  color: theme.colorScheme.primary,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 21,
-                  letterSpacing: 0.5,
-                ),
-              ),
+              Text("APRS.Chat", style: TextStyle(color: theme.colorScheme.primary, fontWeight: FontWeight.bold, fontSize: 21, letterSpacing: 0.5)),
             ],
           ),
           backgroundColor: Colors.white,
           actions: [
             if (isAdmin)
               Padding(
-                padding:
-                    const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
                 child: ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.red.shade700,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(32)),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 8),
-                  ),
-                  icon: const Icon(Icons.admin_panel_settings_outlined,
-                      size: 20),
+                      backgroundColor: Colors.red.shade700,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(32)),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8)),
+                  icon: const Icon(Icons.admin_panel_settings_outlined, size: 20),
                   label: const Text("Admin Panel"),
                   onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (context) => AdminPanelScreen(
-                            callsign: _socketService.callsign!),
-                      ),
-                    );
+                    Navigator.of(context).push(MaterialPageRoute(builder: (context) => AdminPanelScreen(callsign: _socketService.callsign!)));
                   },
                 ),
               ),
@@ -457,19 +580,26 @@ class _HomeScreenState extends State<HomeScreen> {
               padding: const EdgeInsets.only(right: 8.0),
               child: IconButton(
                 tooltip: "Login on Mobile",
-                icon: Icon(Icons.qr_code,
-                    color: Colors.teal.shade700, size: 28),
+                icon: Icon(Icons.qr_code, color: Colors.teal.shade700, size: 28),
                 onPressed: _showQrCode,
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.only(right: 24.0),
-              child: IconButton(
-                tooltip: "Logout",
-                icon: Icon(Icons.logout, color: Colors.grey.shade700, size: 28),
-                onPressed: _logout,
-              ),
+            PopupMenuButton<String>(
+              tooltip: "Account Options",
+              onSelected: (value) {
+                if (value == 'download') _socketService.requestDataExport();
+                if (value == 'delete_account') _showDeleteAccountDialog();
+                if (value == 'logout') _logout();
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(value: 'download', child: Text("Download My Data")),
+                const PopupMenuItem(value: 'delete_account', child: Text("Delete Account", style: TextStyle(color: Colors.red))),
+                const PopupMenuDivider(),
+                const PopupMenuItem(value: 'logout', child: Text("Logout")),
+              ],
+              icon: Icon(Icons.account_circle, color: Colors.grey.shade700, size: 28),
             ),
+            const SizedBox(width: 16),
           ],
         ),
       ),
@@ -480,43 +610,25 @@ class _HomeScreenState extends State<HomeScreen> {
             padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 8),
             child: Row(
               children: [
-                // Recents Panel
                 Container(
                   width: 280,
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(18),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.03),
-                        blurRadius: 8,
-                        offset: const Offset(2, 2),
-                      ),
-                    ],
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8, offset: const Offset(2, 2))],
                   ),
                   child: Column(
                     children: [
                       Padding(
-                        padding: const EdgeInsets.symmetric(
-                            vertical: 18, horizontal: 22),
+                        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 22),
                         child: Row(
                           children: [
-                            Icon(Icons.history,
-                                color: theme.colorScheme.primary, size: 22),
+                            Icon(Icons.history, color: theme.colorScheme.primary, size: 22),
                             const SizedBox(width: 8),
-                            Text(
-                              "Recents",
-                              style: TextStyle(
-                                color: theme.colorScheme.primary,
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 0.2,
-                              ),
-                            ),
+                            Text("Recents", style: TextStyle(color: theme.colorScheme.primary, fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 0.2)),
                             const Spacer(),
                             IconButton(
-                              icon: Icon(Icons.add_comment_outlined,
-                                  color: theme.colorScheme.primary),
+                              icon: Icon(Icons.add_comment_outlined, color: theme.colorScheme.primary),
                               tooltip: "New Message",
                               onPressed: _showNewMessageDialog,
                             ),
@@ -549,19 +661,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 const SizedBox(width: 32),
-                // Chat and Map Panel
                 Expanded(
                   child: Container(
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(18),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.03),
-                          blurRadius: 8,
-                          offset: const Offset(2, 2),
-                        ),
-                      ],
+                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8, offset: const Offset(2, 2))],
                     ),
                     child: selectedIndex == null
                         ? Center(
@@ -570,28 +675,11 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(Icons.message_rounded,
-                                      color: theme.colorScheme.primary
-                                          .withOpacity(0.4),
-                                      size: 56),
+                                  Icon(Icons.message_rounded, color: theme.colorScheme.primary.withOpacity(0.4), size: 56),
                                   const SizedBox(height: 24),
-                                  Text(
-                                    "Welcome, ${_socketService.callsign ?? ''}!",
-                                    style: TextStyle(
-                                      fontSize: 23,
-                                      color: theme.colorScheme.primary,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
+                                  Text("Welcome, ${_socketService.callsign ?? ''}!", style: TextStyle(fontSize: 23, color: theme.colorScheme.primary, fontWeight: FontWeight.bold)),
                                   const SizedBox(height: 14),
-                                  Text(
-                                    "Select a recent contact on the left to view your message history, or click the '+' icon to start a new chat.",
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      color: Colors.grey.shade700,
-                                      fontSize: 16,
-                                    ),
-                                  ),
+                                  Text("Select a recent contact on the left to view your message history, or click the '+' icon to start a new chat.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade700, fontSize: 16)),
                                 ],
                               ),
                             ),
@@ -599,79 +687,54 @@ class _HomeScreenState extends State<HomeScreen> {
                         : Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              // Chat Header Bar
                               Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 24, vertical: 20),
+                                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                                 decoration: BoxDecoration(
-                                  borderRadius: const BorderRadius.vertical(
-                                      top: Radius.circular(18)),
-                                  color: theme.colorScheme.primary
-                                      .withOpacity(0.05),
+                                  borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+                                  color: theme.colorScheme.primary.withOpacity(0.05),
                                 ),
                                 child: Row(
                                   children: [
                                     CircleAvatar(
-                                      backgroundColor: theme
-                                          .colorScheme.primary
-                                          .withOpacity(0.13),
-                                      foregroundColor:
-                                          theme.colorScheme.primary,
-                                      child: Text(
-                                        recents[selectedIndex!]
-                                            .callsign
-                                            .substring(0, 1),
-                                      ),
+                                      backgroundColor: theme.colorScheme.primary.withOpacity(0.13),
+                                      foregroundColor: theme.colorScheme.primary,
+                                      child: Text(recents[selectedIndex!].callsign.substring(0, 1)),
                                     ),
                                     const SizedBox(width: 12),
-                                    Text(
-                                      recents[selectedIndex!].callsign,
-                                      style: TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.bold,
-                                        color: theme.colorScheme.primary,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      "History",
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        color: theme.colorScheme.primary
-                                            .withOpacity(0.6),
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
+                                    Text(recents[selectedIndex!].callsign, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: theme.colorScheme.primary)),
+                                    const Spacer(),
+                                    PopupMenuButton<String>(
+                                      icon: const Icon(Icons.more_vert),
+                                      tooltip: "Conversation Options",
+                                      onSelected: (value) {
+                                        final contact = recents[selectedIndex!];
+                                        if (value == 'delete') _showDeleteConversationDialog(contact);
+                                        if (value == 'block') _showBlockCallsignDialog(contact);
+                                      },
+                                      itemBuilder: (context) => [
+                                        const PopupMenuItem(value: 'delete', child: Text("Delete Conversation")),
+                                        const PopupMenuItem(value: 'block', child: Text("Block Callsign")),
+                                      ],
+                                    )
                                   ],
                                 ),
                               ),
                               const Divider(height: 1),
-                              // Chat Messages
                               Expanded(
                                 child: ListView.builder(
-                                  controller:
-                                      _chatScrollController,
+                                  controller: _chatScrollController,
                                   reverse: true,
-                                  padding: const EdgeInsets.symmetric(
-                                      vertical: 16, horizontal: 16),
-                                  itemCount:
-                                      recents[selectedIndex!].messages.length,
+                                  padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+                                  itemCount: recents[selectedIndex!].messages.length,
                                   itemBuilder: (context, i) {
-                                    final index = recents[selectedIndex!]
-                                            .messages
-                                            .length -
-                                        1 -
-                                        i;
-                                    final msg =
-                                        recents[selectedIndex!].messages[index];
+                                    final index = recents[selectedIndex!].messages.length - 1 - i;
+                                    final msg = recents[selectedIndex!].messages[index];
                                     return ChatBubble(message: msg);
                                   },
                                 ),
                               ),
-                              // Message Entry Box
                               Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(18, 0, 18, 12),
+                                padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
                                 child: Row(
                                   children: [
                                     Expanded(
@@ -680,27 +743,21 @@ class _HomeScreenState extends State<HomeScreen> {
                                         decoration: InputDecoration(
                                           hintText: "Type a message...",
                                           border: OutlineInputBorder(
-                                            borderRadius:
-                                                BorderRadius.circular(48),
+                                            borderRadius: BorderRadius.circular(48),
                                             borderSide: BorderSide.none,
                                           ),
                                           filled: true,
                                           fillColor: Colors.grey.shade100,
-                                          contentPadding:
-                                              const EdgeInsets.symmetric(
-                                                  horizontal: 20,
-                                                  vertical: 10),
+                                          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                                         ),
                                         onSubmitted: (_) => _sendMessage(),
                                       ),
                                     ),
                                     const SizedBox(width: 8),
                                     CircleAvatar(
-                                      backgroundColor:
-                                          theme.colorScheme.primary,
+                                      backgroundColor: theme.colorScheme.primary,
                                       child: IconButton(
-                                        icon: const Icon(Icons.send,
-                                            color: Colors.white),
+                                        icon: const Icon(Icons.send, color: Colors.white),
                                         onPressed: _sendMessage,
                                         tooltip: 'Send',
                                       ),
@@ -708,15 +765,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ],
                                 ),
                               ),
-                              // Map Widget BELOW the chat/input
                               Padding(
                                 padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
                                 child: SizedBox(
-                                  height:
-                                      200,
+                                  height: 200,
                                   child: MessageRouteMap(
-                                    route:
-                                        recents[selectedIndex!].route ?? [],
+                                    route: recents[selectedIndex!].route ?? [],
                                     contact: recents[selectedIndex!].callsign,
                                   ),
                                 ),
