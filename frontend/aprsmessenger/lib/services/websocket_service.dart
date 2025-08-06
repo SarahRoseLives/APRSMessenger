@@ -45,7 +45,7 @@ class WebSocketService with ChangeNotifier {
     final loginCompleter = Completer<Map<String, dynamic>>();
 
     try {
-      final uri = Uri.parse('ws://localhost:8585/ws');
+      final uri = Uri.parse('wss://aprs.chat/ws');
 //      final uri = Uri.parse('wss://aprs.chat/ws');
       _channel = WebSocketChannel.connect(uri);
 

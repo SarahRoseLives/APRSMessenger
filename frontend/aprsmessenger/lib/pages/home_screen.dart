@@ -4,9 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-// Conditional import for dart:html
-import 'package:aprsmessenger_gateway/conditional_export.dart'
-    if (dart.library.html) 'dart:html' as html;
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import '../models/contact.dart';
 import '../models/chat_message.dart';
@@ -16,6 +14,7 @@ import '../widgets/contact_tile.dart';
 import '../widgets/message_route_map.dart';
 import 'admin_panel_screen.dart';
 import 'landing_page.dart';
+import '../util/data_exporter.dart'; // <-- Add this import
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -166,8 +165,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 messageId: messageId,
                 fromMe: fromMe,
                 text: text,
-                time: _displayTime(createdAt),
-              ));
+                time: _displayTime(createdAt)),
+              );
           recents[idx] = recents[idx].copyWith(
             callsign: contactCallsign,
             ownCallsign: ownCallsignForChat,
@@ -246,16 +245,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _handleDataExport(dynamic data) {
     final prettyJson = const JsonEncoder.withIndent('  ').convert(data);
-    // This part is web-specific. A conditional import handles the 'html' package.
+    bool exported = false;
+
+    // Try exporting via platform-specific code
     try {
-      final blob = html.Blob([prettyJson], 'application/json');
-      final url = html.Url.createObjectUrlFromBlob(blob);
-      final anchor = html.AnchorElement(href: url)
-        ..setAttribute("download", "aprs_chat_export.json")
-        ..click();
-      html.Url.revokeObjectUrl(url);
+      exportData(data);
+      exported = kIsWeb; // Only web will actually download, others fallback to dialog
     } catch (e) {
-      // Fallback for non-web platforms or if html import fails
+      exported = false;
+    }
+
+    if (!exported) {
       showDialog(
           context: context,
           builder: (context) => AlertDialog(
