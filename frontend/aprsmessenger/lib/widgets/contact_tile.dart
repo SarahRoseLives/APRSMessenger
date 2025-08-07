@@ -18,8 +18,14 @@ class ContactTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final bool isAdmin = contact.isAdminMessage;
+
     return Material(
-      color: selected ? theme.colorScheme.secondary.withOpacity(0.14) : Colors.transparent,
+      color: isAdmin
+          ? Colors.red.withOpacity(0.08)
+          : (selected
+              ? theme.colorScheme.secondary.withOpacity(0.14)
+              : Colors.transparent),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
@@ -28,9 +34,14 @@ class ContactTile extends StatelessWidget {
           child: Row(
             children: [
               CircleAvatar(
-                backgroundColor: theme.colorScheme.primary.withOpacity(0.13),
-                foregroundColor: theme.colorScheme.primary,
-                child: Text(contact.callsign.substring(0, 1)),
+                backgroundColor: isAdmin
+                    ? Colors.red.shade100
+                    : theme.colorScheme.primary.withOpacity(0.13),
+                foregroundColor:
+                    isAdmin ? Colors.red.shade700 : theme.colorScheme.primary,
+                child: isAdmin
+                    ? const Icon(Icons.campaign, size: 22)
+                    : Text(contact.callsign.substring(0, 1)),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -43,11 +54,13 @@ class ContactTile extends StatelessWidget {
                           contact.callsign,
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
-                            color: theme.colorScheme.primary,
+                            color: isAdmin
+                                ? Colors.red.shade700
+                                : theme.colorScheme.primary,
                             fontSize: 16,
                           ),
                         ),
-                        if (contact.unread)
+                        if (contact.unread && !isAdmin)
                           Container(
                             margin: const EdgeInsets.only(left: 6),
                             width: 8,

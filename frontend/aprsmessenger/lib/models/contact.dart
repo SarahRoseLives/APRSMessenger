@@ -10,6 +10,7 @@ class RecentContact {
   final List<ChatMessage> messages;
   final bool unread;
   final List<RouteHop>? route; // <--- ADDED
+  final bool isAdminMessage;
 
   final String? lastReceivedMessageId; // ID of the last message we got from them
 
@@ -23,6 +24,7 @@ class RecentContact {
     required this.unread,
     this.route,
     this.lastReceivedMessageId,
+    this.isAdminMessage = false,
   });
 
   RecentContact copyWith({
@@ -35,6 +37,7 @@ class RecentContact {
     bool? unread,
     List<RouteHop>? route,
     String? lastReceivedMessageId,
+    bool? isAdminMessage,
   }) {
     return RecentContact(
       groupingId: groupingId ?? this.groupingId,
@@ -45,7 +48,9 @@ class RecentContact {
       messages: messages ?? this.messages,
       unread: unread ?? this.unread,
       route: route ?? this.route,
-      lastReceivedMessageId: lastReceivedMessageId ?? this.lastReceivedMessageId,
+      lastReceivedMessageId:
+          lastReceivedMessageId ?? this.lastReceivedMessageId,
+      isAdminMessage: isAdminMessage ?? this.isAdminMessage,
     );
   }
 }

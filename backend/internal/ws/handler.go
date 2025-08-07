@@ -22,9 +22,9 @@ import (
 
 // MessageState holds the state for a message in a conversation.
 type MessageState struct {
-	LastSentMsgId     string         // The last message ID sent (by us)
-	LastReceivedMsgId string         // The last message ID received (from their side)
-	SentMsgRetryCount map[string]int // messageId -> retry count (for received duplicates)
+	LastSentMsgId     string // The last message ID sent (by us)
+	LastReceivedMsgId string // The last message ID received (from their side)
+	SentMsgRetryCount map[string]int   // messageId -> retry count (for received duplicates)
 	Mutex             sync.Mutex
 }
 
@@ -97,6 +97,18 @@ func sendSuccessResponse(conn *websocket.Conn, data WSResponse) {
 func sendErrorResponse(conn *websocket.Conn, errMsg string) {
 	response := WSResponse{"success": false, "error": errMsg}
 	_ = conn.WriteJSON(response)
+}
+
+// isUserAdmin checks if a given callsign is in the hardcoded admin list.
+func isUserAdmin(callsign string) bool {
+	baseCallsign := getBaseCallsign(callsign)
+	// In a real app, this would be a database role check.
+	adminCallsigns := map[string]struct{}{
+		"K8SDR": {},
+		"AD8NT": {},
+	}
+	_, isAdmin := adminCallsigns[baseCallsign]
+	return isAdmin
 }
 
 // HandleWebSocket is the main entry point for websocket connections.
@@ -191,6 +203,10 @@ authenticated:
 			handleRequestDataExport(conn, user.Callsign)
 		case "delete_account":
 			handleDeleteAccount(conn, user, req)
+		case "get_admin_stats":
+			handleGetAdminStats(conn, user)
+		case "admin_broadcast":
+			handleAdminBroadcast(conn, user, req)
 		default:
 			sendErrorResponse(conn, "Unknown action.")
 		}
@@ -349,7 +365,7 @@ func handleDeleteConversation(conn *websocket.Conn, userCallsign string, req WSR
 		sendErrorResponse(conn, "Failed to delete conversation.")
 	} else {
 		log.Printf("[WS] Deleted conversation for %s with %s", userCallsign, contactCallsign)
-		_ = conn.WriteJSON(WSResponse{"type": "conversation_deleted", "contact": contactCallsign})
+		_ = conn.WriteJSON(WSResponse{"type": "conversation_deleted", "contact": getBaseCallsign(contactCallsign)})
 	}
 }
 
@@ -365,7 +381,7 @@ func handleBlockCallsign(conn *websocket.Conn, userID int, req WSRequest) {
 		sendErrorResponse(conn, "Failed to block callsign.")
 	} else {
 		log.Printf("[WS] User %d blocked %s", userID, callsignToBlock)
-		_ = conn.WriteJSON(WSResponse{"type": "callsign_blocked", "contact": callsignToBlock})
+		_ = conn.WriteJSON(WSResponse{"type": "callsign_blocked", "contact": getBaseCallsign(callsignToBlock)})
 	}
 }
 
@@ -391,6 +407,91 @@ func handleDeleteAccount(conn *websocket.Conn, user *models.User, req WSRequest)
 	}
 	log.Printf("[WS] DELETED ACCOUNT for user %s (ID: %d)", user.Callsign, user.ID)
 	_ = conn.WriteJSON(WSResponse{"type": "account_deleted", "success": true})
+}
+
+// handleGetAdminStats gathers and sends admin-level statistics to the client.
+func handleGetAdminStats(conn *websocket.Conn, user *models.User) {
+	if !isUserAdmin(user.Callsign) {
+		sendErrorResponse(conn, "Access denied.")
+		return
+	}
+
+	users, err := db.LoadAllUsers()
+	if err != nil {
+		log.Printf("[WS ADMIN] Failed to load users: %v", err)
+		sendErrorResponse(conn, "Failed to retrieve user list.")
+		return
+	}
+
+	stats, err := db.GetMessageStats()
+	if err != nil {
+		log.Printf("[WS ADMIN] Failed to get message stats: %v", err)
+		sendErrorResponse(conn, "Failed to retrieve message statistics.")
+		return
+	}
+
+	// Don't send password hashes to the client, even the admin.
+	clientUsers := make([]map[string]interface{}, len(users))
+	for i, u := range users {
+		clientUsers[i] = map[string]interface{}{
+			"id":       u.ID,
+			"callsign": u.Callsign,
+		}
+	}
+
+	response := WSResponse{
+		"type":      "admin_stats_update",
+		"success":   true,
+		"users":     clientUsers,
+		"stats":     stats,
+		"userCount": len(users),
+	}
+	_ = conn.WriteJSON(response)
+}
+
+// handleAdminBroadcast sends a system-wide message from an admin.
+func handleAdminBroadcast(conn *websocket.Conn, user *models.User, req WSRequest) {
+	if !isUserAdmin(user.Callsign) {
+		sendErrorResponse(conn, "Access denied.")
+		return
+	}
+	if req.Message == "" {
+		sendErrorResponse(conn, "Broadcast message cannot be empty.")
+		return
+	}
+
+	log.Printf("[WS ADMIN] User %s sending broadcast: %s", user.Callsign, req.Message)
+
+	// Step 1: Store the message for every user for their history
+	allUsers, err := db.LoadAllUsers()
+	if err != nil {
+		log.Printf("[DB] Failed to load all users for broadcast: %v", err)
+		sendErrorResponse(conn, "Failed to load user list for broadcast.")
+		return
+	}
+
+	for _, u := range allUsers {
+		// Store with a special "from" callsign. The `to_callsign` is the actual user.
+		err := db.StoreMessage(u.Callsign, "ADMIN", req.Message)
+		if err != nil {
+			log.Printf("[DB] Failed to store broadcast message for user %s: %v", u.Callsign, err)
+			// Don't stop the whole broadcast for one user
+		}
+	}
+
+	// Step 2: Broadcast to all currently connected clients
+	payload := WSResponse{
+		"aprs_msg":   true,
+		"from":       "ADMIN",
+		"to":         "BROADCAST", // Special 'to' field for clients
+		"message":    req.Message,
+		"created_at": time.Now().UTC().Format(time.RFC3339),
+		"route":      []aprs.RouteHop{}, // Empty route
+	}
+	aprs.GetSessionsManager().BroadcastToAll(payload)
+
+	// Step 3: Send confirmation to the admin who sent it
+	sendSuccessResponse(conn, WSResponse{"message": "Broadcast sent to all users."})
 }
 
 func cleanCallsign(callsign string) string {

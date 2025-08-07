@@ -1,5 +1,5 @@
 name: aprsmessenger
-description: "A new Flutter project."
+description: "Welcome to APRS.Chat, Your Home for APRS Messaging."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -41,6 +41,7 @@ dependencies:
   flutter_map: ^6.1.0
   latlong2: ^0.9.0
   flutter_launcher_icons: ^0.13.1
+  url_launcher: ^6.2.4
 
 dev_dependencies:
   flutter_test:

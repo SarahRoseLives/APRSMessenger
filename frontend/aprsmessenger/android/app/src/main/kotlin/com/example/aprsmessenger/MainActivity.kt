@@ -1,4 +1,4 @@
-package com.example.aprsmessenger
+package com.sarahsforge.aprschat
 
 import io.flutter.embedding.android.FlutterActivity
 

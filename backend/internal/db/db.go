@@ -302,3 +302,18 @@ func GetUserByID(id int) (*models.User, error) {
 	}
 	return user, err
 }
+
+// MessageStats holds basic statistics about messages.
+type MessageStats struct {
+	TotalMessages int `json:"total_messages"`
+}
+
+// GetMessageStats calculates and returns statistics about the messages table.
+func GetMessageStats() (*MessageStats, error) {
+	stats := &MessageStats{}
+	err := db.QueryRow("SELECT COUNT(*) FROM messages").Scan(&stats.TotalMessages)
+	if err != nil {
+		return nil, err
+	}
+	return stats, nil
+}

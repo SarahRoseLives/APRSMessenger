@@ -80,6 +80,9 @@ class _HomeScreenState extends State<HomeScreen> {
               if (deletedIndex != -1) {
                 if (selectedIndex == deletedIndex) {
                   selectedIndex = null;
+                } else if (selectedIndex != null &&
+                    deletedIndex < selectedIndex!) {
+                  selectedIndex = selectedIndex! - 1;
                 }
                 recents.removeAt(deletedIndex);
               }
@@ -122,6 +125,8 @@ class _HomeScreenState extends State<HomeScreen> {
         final isHistory = msg["history"] == true;
         final text = msg["message"] ?? "";
         final createdAt = msg["created_at"];
+        final bool isAdminMsg = from == 'ADMIN';
+
         final routeHops = msg['route'] != null && msg['route'] is List
             ? (msg['route'] as List)
                 .map((hop) => RouteHop.fromJson(hop))
@@ -130,50 +135,50 @@ class _HomeScreenState extends State<HomeScreen> {
 
         final userBaseCallsign =
             (_socketService.callsign ?? '').toUpperCase().split('-').first;
-        if (userBaseCallsign.isEmpty) return;
+        if (userBaseCallsign.isEmpty && !isAdminMsg) return;
+
         final fromBaseCallsign = from.split('-').first;
         final fromMe = fromBaseCallsign == userBaseCallsign;
 
         final contactCallsign = fromMe ? to : from;
         final ownCallsignForChat = fromMe ? from : to;
-        final groupingKey = contactCallsign.split('-').first;
+        final groupingKey =
+            isAdminMsg ? 'ADMIN' : contactCallsign.split('-').first;
 
         final messageId = msg['messageId']?.toString() ??
             DateTime.now().millisecondsSinceEpoch.toString();
 
         int idx = recents.indexWhere((c) => c.groupingId == groupingKey);
+
+        final newMessage = ChatMessage(
+            messageId: messageId,
+            fromMe: fromMe,
+            text: text,
+            time: _displayTime(createdAt));
+
         if (idx == -1) {
           recents.add(RecentContact(
             groupingId: groupingKey,
-            callsign: contactCallsign,
-            ownCallsign: ownCallsignForChat,
+            callsign: isAdminMsg ? 'ADMIN' : contactCallsign,
+            ownCallsign: isAdminMsg ? 'ADMIN' : ownCallsignForChat,
             lastMessage: text,
             time: _formatTime(createdAt),
-            messages: [
-              ChatMessage(
-                  messageId: messageId,
-                  fromMe: fromMe,
-                  text: text,
-                  time: _displayTime(createdAt)),
-            ],
+            messages: [newMessage],
             unread: !fromMe && !isHistory,
             route: routeHops,
+            isAdminMessage: isAdminMsg,
           ));
           idx = recents.length - 1;
         } else {
-          recents[idx].messages.add(ChatMessage(
-                messageId: messageId,
-                fromMe: fromMe,
-                text: text,
-                time: _displayTime(createdAt)),
-              );
+          recents[idx].messages.add(newMessage);
           recents[idx] = recents[idx].copyWith(
-            callsign: contactCallsign,
-            ownCallsign: ownCallsignForChat,
+            callsign: isAdminMsg ? 'ADMIN' : contactCallsign,
+            ownCallsign: isAdminMsg ? 'ADMIN' : ownCallsignForChat,
             lastMessage: text,
             time: _formatTime(createdAt),
             unread: (!fromMe && !isHistory) || recents[idx].unread,
             route: routeHops ?? recents[idx].route,
+            isAdminMessage: isAdminMsg,
           );
         }
         final bool shouldScroll = selectedIndex == idx && !isHistory;
@@ -182,9 +187,19 @@ class _HomeScreenState extends State<HomeScreen> {
           recents[idx] = recents[idx].copyWith(unread: true);
         }
 
-        recents.sort((a, b) => b.time.compareTo(a.time));
+        recents.sort((a, b) {
+          if (a.isAdminMessage && !b.isAdminMessage) return -1;
+          if (!a.isAdminMessage && b.isAdminMessage) return 1;
+          return b.time.compareTo(a.time);
+        });
+
         // After sorting, the index might change, so we need to find it again
-        selectedIndex = recents.indexWhere((c) => c.groupingId == groupingKey);
+        final currentSelectedGroupingId =
+            selectedIndex != null ? recents[selectedIndex!].groupingId : null;
+        if (currentSelectedGroupingId != null) {
+          selectedIndex = recents
+              .indexWhere((c) => c.groupingId == currentSelectedGroupingId);
+        }
 
         setState(() {});
 
@@ -285,7 +300,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       "This is permanent. All messages and your account will be deleted.",
                       style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 16),
-                  Text("To confirm, please enter your password for ${_socketService.callsign!}:"),
+                  Text(
+                      "To confirm, please enter your password for ${_socketService.callsign!}:"),
                   const SizedBox(height: 8),
                   TextField(
                     controller: passwordController,
@@ -392,7 +408,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _sendMessage() {
     final text = _chatController.text.trim();
-    if (text.isEmpty || selectedIndex == null) return;
+    if (text.isEmpty ||
+        selectedIndex == null ||
+        recents[selectedIndex!].isAdminMessage) return;
+
     final contact = recents[selectedIndex!];
 
     final tempMessageId = DateTime.now().millisecondsSinceEpoch.toString();
@@ -415,7 +434,11 @@ class _HomeScreenState extends State<HomeScreen> {
         time: DateTime.now().toIso8601String(),
         unread: false,
       );
-      recents.sort((a, b) => b.time.compareTo(a.time));
+      recents.sort((a, b) {
+        if (a.isAdminMessage && !b.isAdminMessage) return -1;
+        if (!a.isAdminMessage && b.isAdminMessage) return 1;
+        return b.time.compareTo(a.time);
+      });
       _chatController.clear();
     });
     _scrollToBottom();
@@ -488,8 +511,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
       setState(() {
         recents.add(newContact);
-        recents.sort((a, b) => b.time.compareTo(a.time));
-        selectedIndex = recents.indexWhere((c) => c.groupingId == groupingKey);
+        recents.sort((a, b) {
+          if (a.isAdminMessage && !b.isAdminMessage) return -1;
+          if (!a.isAdminMessage && b.isAdminMessage) return 1;
+          return b.time.compareTo(a.time);
+        });
+        selectedIndex =
+            recents.indexWhere((c) => c.groupingId == groupingKey);
       });
     }
     _scrollToBottom();
@@ -524,6 +552,8 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final bool isReplyDisabled =
+        selectedIndex != null && recents[selectedIndex!].isAdminMessage;
 
     if (_loginError != null) {
       return Scaffold(
@@ -532,7 +562,11 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(_loginError!, style: const TextStyle(color: Colors.red, fontSize: 18, fontWeight: FontWeight.bold)),
+              Text(_loginError!,
+                  style: const TextStyle(
+                      color: Colors.red,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold)),
               const SizedBox(height: 24),
               ElevatedButton(
                 onPressed: () => Navigator.of(context).pop(),
@@ -552,27 +586,42 @@ class _HomeScreenState extends State<HomeScreen> {
           titleSpacing: 24,
           title: Row(
             children: [
-              Icon(Icons.message_rounded, size: 28, color: theme.colorScheme.primary),
+              Icon(Icons.message_rounded,
+                  size: 28, color: theme.colorScheme.primary),
               const SizedBox(width: 12),
-              Text("APRS.Chat", style: TextStyle(color: theme.colorScheme.primary, fontWeight: FontWeight.bold, fontSize: 21, letterSpacing: 0.5)),
+              Text("APRS.Chat",
+                  style: TextStyle(
+                      color: theme.colorScheme.primary,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 21,
+                      letterSpacing: 0.5)),
             ],
           ),
           backgroundColor: Colors.white,
           actions: [
             if (isAdmin)
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                padding:
+                    const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
                 child: ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.red.shade700,
                       foregroundColor: Colors.white,
                       elevation: 0,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(32)),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8)),
-                  icon: const Icon(Icons.admin_panel_settings_outlined, size: 20),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(32)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 8)),
+                  icon: const Icon(Icons.admin_panel_settings_outlined,
+                      size: 20),
                   label: const Text("Admin Panel"),
                   onPressed: () {
-                    Navigator.of(context).push(MaterialPageRoute(builder: (context) => AdminPanelScreen(callsign: _socketService.callsign!)));
+                    Navigator.of(context).push(MaterialPageRoute(
+                        builder: (context) => ChangeNotifierProvider.value(
+                              value: _socketService,
+                              child: AdminPanelScreen(
+                                  callsign: _socketService.callsign!),
+                            )));
                   },
                 ),
               ),
@@ -580,7 +629,8 @@ class _HomeScreenState extends State<HomeScreen> {
               padding: const EdgeInsets.only(right: 8.0),
               child: IconButton(
                 tooltip: "Login on Mobile",
-                icon: Icon(Icons.qr_code, color: Colors.teal.shade700, size: 28),
+                icon: Icon(Icons.qr_code,
+                    color: Colors.teal.shade700, size: 28),
                 onPressed: _showQrCode,
               ),
             ),
@@ -592,12 +642,17 @@ class _HomeScreenState extends State<HomeScreen> {
                 if (value == 'logout') _logout();
               },
               itemBuilder: (context) => [
-                const PopupMenuItem(value: 'download', child: Text("Download My Data")),
-                const PopupMenuItem(value: 'delete_account', child: Text("Delete Account", style: TextStyle(color: Colors.red))),
+                const PopupMenuItem(
+                    value: 'download', child: Text("Download My Data")),
+                const PopupMenuItem(
+                    value: 'delete_account',
+                    child: Text("Delete Account",
+                        style: TextStyle(color: Colors.red))),
                 const PopupMenuDivider(),
                 const PopupMenuItem(value: 'logout', child: Text("Logout")),
               ],
-              icon: Icon(Icons.account_circle, color: Colors.grey.shade700, size: 28),
+              icon: Icon(Icons.account_circle,
+                  color: Colors.grey.shade700, size: 28),
             ),
             const SizedBox(width: 16),
           ],
@@ -615,20 +670,33 @@ class _HomeScreenState extends State<HomeScreen> {
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(18),
-                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8, offset: const Offset(2, 2))],
+                    boxShadow: [
+                      BoxShadow(
+                          color: Colors.black.withOpacity(0.03),
+                          blurRadius: 8,
+                          offset: const Offset(2, 2))
+                    ],
                   ),
                   child: Column(
                     children: [
                       Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 22),
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 18, horizontal: 22),
                         child: Row(
                           children: [
-                            Icon(Icons.history, color: theme.colorScheme.primary, size: 22),
+                            Icon(Icons.history,
+                                color: theme.colorScheme.primary, size: 22),
                             const SizedBox(width: 8),
-                            Text("Recents", style: TextStyle(color: theme.colorScheme.primary, fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 0.2)),
+                            Text("Recents",
+                                style: TextStyle(
+                                    color: theme.colorScheme.primary,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 0.2)),
                             const Spacer(),
                             IconButton(
-                              icon: Icon(Icons.add_comment_outlined, color: theme.colorScheme.primary),
+                              icon: Icon(Icons.add_comment_outlined,
+                                  color: theme.colorScheme.primary),
                               tooltip: "New Message",
                               onPressed: _showNewMessageDialog,
                             ),
@@ -649,7 +717,9 @@ class _HomeScreenState extends State<HomeScreen> {
                               onTap: () {
                                 setState(() {
                                   selectedIndex = i;
-                                  recents[i] = c.copyWith(unread: false);
+                                  if (c.unread) {
+                                    recents[i] = c.copyWith(unread: false);
+                                  }
                                 });
                                 _scrollToBottom();
                               },
@@ -666,7 +736,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(18),
-                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8, offset: const Offset(2, 2))],
+                      boxShadow: [
+                        BoxShadow(
+                            color: Colors.black.withOpacity(0.03),
+                            blurRadius: 8,
+                            offset: const Offset(2, 2))
+                      ],
                     ),
                     child: selectedIndex == null
                         ? Center(
@@ -675,11 +750,24 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(Icons.message_rounded, color: theme.colorScheme.primary.withOpacity(0.4), size: 56),
+                                  Icon(Icons.message_rounded,
+                                      color:
+                                          theme.colorScheme.primary.withOpacity(0.4),
+                                      size: 56),
                                   const SizedBox(height: 24),
-                                  Text("Welcome, ${_socketService.callsign ?? ''}!", style: TextStyle(fontSize: 23, color: theme.colorScheme.primary, fontWeight: FontWeight.bold)),
+                                  Text(
+                                      "Welcome, ${_socketService.callsign ?? ''}!",
+                                      style: TextStyle(
+                                          fontSize: 23,
+                                          color: theme.colorScheme.primary,
+                                          fontWeight: FontWeight.bold)),
                                   const SizedBox(height: 14),
-                                  Text("Select a recent contact on the left to view your message history, or click the '+' icon to start a new chat.", textAlign: TextAlign.center, style: TextStyle(color: Colors.grey.shade700, fontSize: 16)),
+                                  Text(
+                                      "Select a recent contact on the left to view your message history, or click the '+' icon to start a new chat.",
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                          color: Colors.grey.shade700,
+                                          fontSize: 16)),
                                 ],
                               ),
                             ),
@@ -688,33 +776,67 @@ class _HomeScreenState extends State<HomeScreen> {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 24, vertical: 12),
                                 decoration: BoxDecoration(
-                                  borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-                                  color: theme.colorScheme.primary.withOpacity(0.05),
+                                  borderRadius: const BorderRadius.vertical(
+                                      top: Radius.circular(18)),
+                                  color: isReplyDisabled
+                                      ? Colors.red.withOpacity(0.08)
+                                      : theme.colorScheme.primary
+                                          .withOpacity(0.05),
                                 ),
                                 child: Row(
                                   children: [
                                     CircleAvatar(
-                                      backgroundColor: theme.colorScheme.primary.withOpacity(0.13),
-                                      foregroundColor: theme.colorScheme.primary,
-                                      child: Text(recents[selectedIndex!].callsign.substring(0, 1)),
+                                      backgroundColor: isReplyDisabled
+                                          ? Colors.red.shade100
+                                          : theme.colorScheme.primary
+                                              .withOpacity(0.13),
+                                      foregroundColor: isReplyDisabled
+                                          ? Colors.red.shade700
+                                          : theme.colorScheme.primary,
+                                      child: isReplyDisabled
+                                          ? const Icon(Icons.campaign)
+                                          : Text(recents[selectedIndex!]
+                                              .callsign
+                                              .substring(0, 1)),
                                     ),
                                     const SizedBox(width: 12),
-                                    Text(recents[selectedIndex!].callsign, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: theme.colorScheme.primary)),
+                                    Text(recents[selectedIndex!].callsign,
+                                        style: TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.bold,
+                                            color: isReplyDisabled
+                                                ? Colors.red.shade700
+                                                : theme.colorScheme.primary)),
                                     const Spacer(),
                                     PopupMenuButton<String>(
                                       icon: const Icon(Icons.more_vert),
                                       tooltip: "Conversation Options",
                                       onSelected: (value) {
-                                        final contact = recents[selectedIndex!];
-                                        if (value == 'delete') _showDeleteConversationDialog(contact);
-                                        if (value == 'block') _showBlockCallsignDialog(contact);
+                                        final contact =
+                                            recents[selectedIndex!];
+                                        if (value == 'delete')
+                                          _showDeleteConversationDialog(
+                                              contact);
+                                        if (value == 'block')
+                                          _showBlockCallsignDialog(contact);
                                       },
-                                      itemBuilder: (context) => [
-                                        const PopupMenuItem(value: 'delete', child: Text("Delete Conversation")),
-                                        const PopupMenuItem(value: 'block', child: Text("Block Callsign")),
-                                      ],
+                                      itemBuilder: (context) {
+                                        final contact =
+                                            recents[selectedIndex!];
+                                        return <PopupMenuEntry<String>>[
+                                          const PopupMenuItem(
+                                              value: 'delete',
+                                              child: Text(
+                                                  "Delete Conversation")),
+                                          if (!contact.isAdminMessage)
+                                            const PopupMenuItem(
+                                                value: 'block',
+                                                child: Text("Block Callsign")),
+                                        ];
+                                      },
                                     )
                                   ],
                                 ),
@@ -724,53 +846,70 @@ class _HomeScreenState extends State<HomeScreen> {
                                 child: ListView.builder(
                                   controller: _chatScrollController,
                                   reverse: true,
-                                  padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
-                                  itemCount: recents[selectedIndex!].messages.length,
+                                  padding: const EdgeInsets.symmetric(
+                                      vertical: 16, horizontal: 16),
+                                  itemCount:
+                                      recents[selectedIndex!].messages.length,
                                   itemBuilder: (context, i) {
-                                    final index = recents[selectedIndex!].messages.length - 1 - i;
-                                    final msg = recents[selectedIndex!].messages[index];
+                                    final index = recents[selectedIndex!]
+                                            .messages
+                                            .length -
+                                        1 -
+                                        i;
+                                    final msg = recents[selectedIndex!]
+                                        .messages[index];
                                     return ChatBubble(message: msg);
                                   },
                                 ),
                               ),
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: TextField(
-                                        controller: _chatController,
-                                        decoration: InputDecoration(
-                                          hintText: "Type a message...",
-                                          border: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(48),
-                                            borderSide: BorderSide.none,
+                              if (!isReplyDisabled)
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.fromLTRB(18, 0, 18, 12),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: TextField(
+                                          controller: _chatController,
+                                          decoration: InputDecoration(
+                                            hintText: "Type a message...",
+                                            border: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(48),
+                                              borderSide: BorderSide.none,
+                                            ),
+                                            filled: true,
+                                            fillColor: Colors.grey.shade100,
+                                            contentPadding:
+                                                const EdgeInsets.symmetric(
+                                                    horizontal: 20,
+                                                    vertical: 10),
                                           ),
-                                          filled: true,
-                                          fillColor: Colors.grey.shade100,
-                                          contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                                          onSubmitted: (_) => _sendMessage(),
                                         ),
-                                        onSubmitted: (_) => _sendMessage(),
                                       ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    CircleAvatar(
-                                      backgroundColor: theme.colorScheme.primary,
-                                      child: IconButton(
-                                        icon: const Icon(Icons.send, color: Colors.white),
-                                        onPressed: _sendMessage,
-                                        tooltip: 'Send',
+                                      const SizedBox(width: 8),
+                                      CircleAvatar(
+                                        backgroundColor:
+                                            theme.colorScheme.primary,
+                                        child: IconButton(
+                                          icon: const Icon(Icons.send,
+                                              color: Colors.white),
+                                          onPressed: _sendMessage,
+                                          tooltip: 'Send',
+                                        ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
-                              ),
                               Padding(
-                                padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+                                padding:
+                                    const EdgeInsets.fromLTRB(18, 0, 18, 18),
                                 child: SizedBox(
                                   height: 200,
                                   child: MessageRouteMap(
-                                    route: recents[selectedIndex!].route ?? [],
+                                    route:
+                                        recents[selectedIndex!].route ?? [],
                                     contact: recents[selectedIndex!].callsign,
                                   ),
                                 ),

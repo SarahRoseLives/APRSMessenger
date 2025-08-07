@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/websocket_service.dart';
 import 'home_screen.dart';
+import '../util/url_launcher.dart';
 
 class LandingPage extends StatefulWidget {
   const LandingPage({super.key});
@@ -91,6 +92,18 @@ class _LandingPageState extends State<LandingPage> {
     }
   }
 
+  // Helper to launch or redirect to Android app link (cross-platform)
+  Future<void> _launchAndroidApp() async {
+    const url = 'https://play.google.com/apps/testing/com.sarahsforge.aprschat';
+    final success = await launchPlatformUrl(url);
+
+    if (!success && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open the link')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -107,7 +120,8 @@ class _LandingPageState extends State<LandingPage> {
                   flex: 3,
                   child: Container(
                     height: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 60, vertical: 60),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 60, vertical: 60),
                     color: theme.colorScheme.primary.withOpacity(0.07),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -116,7 +130,8 @@ class _LandingPageState extends State<LandingPage> {
                         // Logo/Icon
                         Row(
                           children: [
-                            Icon(Icons.message_rounded, size: 54, color: theme.colorScheme.primary),
+                            Icon(Icons.message_rounded,
+                                size: 54, color: theme.colorScheme.primary),
                             const SizedBox(width: 20),
                             Text(
                               "APRS.Chat",
@@ -163,9 +178,32 @@ class _LandingPageState extends State<LandingPage> {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 18),
-                        // (Optional) Add an illustration or hero image here for extra flair
-                        // Expanded(child: Image.asset('assets/hero.png', fit: BoxFit.contain)),
+                        const SizedBox(height: 28),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: theme.colorScheme.primary,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                                vertical: 14, horizontal: 20),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                          ),
+                          onPressed: _launchAndroidApp,
+                          icon: Icon(Icons.android),
+                          label: Text(
+                            "Get the Android App",
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 16),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          "Tap here to test the official APRS.Chat Android app!",
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: theme.colorScheme.primary.withOpacity(0.7),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -178,10 +216,14 @@ class _LandingPageState extends State<LandingPage> {
                     constraints: const BoxConstraints(maxWidth: 400),
                     child: Card(
                       elevation: 6,
-                      margin: EdgeInsets.symmetric(horizontal: isWide ? 32 : 12, vertical: isWide ? 60 : 32),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                      margin: EdgeInsets.symmetric(
+                          horizontal: isWide ? 32 : 12,
+                          vertical: isWide ? 60 : 32),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(24)),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 36, vertical: 42),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 36, vertical: 42),
                         child: SingleChildScrollView(
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
@@ -189,7 +231,9 @@ class _LandingPageState extends State<LandingPage> {
                               if (!isWide)
                                 Column(
                                   children: [
-                                    Icon(Icons.message_rounded, size: 48, color: theme.colorScheme.primary),
+                                    Icon(Icons.message_rounded,
+                                        size: 48,
+                                        color: theme.colorScheme.primary),
                                     const SizedBox(height: 12),
                                     Text(
                                       "APRS.Chat",
@@ -200,6 +244,26 @@ class _LandingPageState extends State<LandingPage> {
                                       ),
                                     ),
                                     const SizedBox(height: 10),
+                                    ElevatedButton.icon(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor:
+                                            theme.colorScheme.primary,
+                                        foregroundColor: Colors.white,
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 12, horizontal: 16),
+                                        shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(10)),
+                                      ),
+                                      onPressed: _launchAndroidApp,
+                                      icon: Icon(Icons.android),
+                                      label: Text(
+                                        "Android App",
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.bold),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
                                   ],
                                 ),
                               ToggleButtons(
@@ -216,18 +280,22 @@ class _LandingPageState extends State<LandingPage> {
                                 color: theme.colorScheme.primary,
                                 children: const [
                                   Padding(
-                                    padding: EdgeInsets.symmetric(horizontal: 20),
+                                    padding:
+                                        EdgeInsets.symmetric(horizontal: 20),
                                     child: Text("Login"),
                                   ),
                                   Padding(
-                                    padding: EdgeInsets.symmetric(horizontal: 20),
+                                    padding:
+                                        EdgeInsets.symmetric(horizontal: 20),
                                     child: Text("Register"),
                                   ),
                                 ],
                               ),
                               const SizedBox(height: 16),
                               Text(
-                                isRegister ? "Create a new account" : "Login with your callsign to continue",
+                                isRegister
+                                    ? "Create a new account"
+                                    : "Login with your callsign to continue",
                                 style: TextStyle(
                                   color: Colors.grey.shade700,
                                   fontSize: 17,
@@ -236,11 +304,14 @@ class _LandingPageState extends State<LandingPage> {
                               const SizedBox(height: 18),
                               TextField(
                                 controller: _callsignController,
-                                textCapitalization: TextCapitalization.characters,
+                                textCapitalization:
+                                    TextCapitalization.characters,
                                 decoration: InputDecoration(
                                   labelText: "Callsign",
-                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                  prefixIcon: Icon(Icons.account_circle_outlined, color: theme.colorScheme.primary),
+                                  border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                  prefixIcon: Icon(Icons.account_circle_outlined,
+                                      color: theme.colorScheme.primary),
                                 ),
                                 enabled: !isLoading,
                               ),
@@ -250,9 +321,13 @@ class _LandingPageState extends State<LandingPage> {
                                   controller: _passcodeController,
                                   decoration: InputDecoration(
                                     labelText: "Passcode",
-                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                    prefixIcon: Icon(Icons.confirmation_num, color: theme.colorScheme.primary),
-                                    helperText: "Obtain your APRS passcode for your callsign.",
+                                    border: OutlineInputBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(12)),
+                                    prefixIcon: Icon(Icons.confirmation_num,
+                                        color: theme.colorScheme.primary),
+                                    helperText:
+                                        "Obtain your APRS passcode for your callsign.",
                                   ),
                                   keyboardType: TextInputType.number,
                                   enabled: !isLoading,
@@ -263,8 +338,10 @@ class _LandingPageState extends State<LandingPage> {
                                 controller: _passwordController,
                                 decoration: InputDecoration(
                                   labelText: "Password",
-                                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                  prefixIcon: Icon(Icons.lock_outline, color: theme.colorScheme.primary),
+                                  border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                  prefixIcon: Icon(Icons.lock_outline,
+                                      color: theme.colorScheme.primary),
                                 ),
                                 obscureText: true,
                                 enabled: !isLoading,
@@ -275,8 +352,11 @@ class _LandingPageState extends State<LandingPage> {
                                   controller: _confirmController,
                                   decoration: InputDecoration(
                                     labelText: "Confirm Password",
-                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                                    prefixIcon: Icon(Icons.lock_person_outlined, color: theme.colorScheme.primary),
+                                    border: OutlineInputBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(12)),
+                                    prefixIcon: Icon(Icons.lock_person_outlined,
+                                        color: theme.colorScheme.primary),
                                   ),
                                   obscureText: true,
                                   enabled: !isLoading,
@@ -288,7 +368,9 @@ class _LandingPageState extends State<LandingPage> {
                                   padding: const EdgeInsets.only(bottom: 10),
                                   child: Text(
                                     errorMsg!,
-                                    style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w600),
+                                    style: const TextStyle(
+                                        color: Colors.red,
+                                        fontWeight: FontWeight.w600),
                                   ),
                                 ),
                               SizedBox(
@@ -297,18 +379,26 @@ class _LandingPageState extends State<LandingPage> {
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: theme.colorScheme.primary,
                                     foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(vertical: 16),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 16),
+                                    shape: RoundedRectangleBorder(
+                                        borderRadius:
+                                            BorderRadius.circular(12)),
                                   ),
-                                  onPressed: isLoading ? null : _attemptConnection,
+                                  onPressed:
+                                      isLoading ? null : _attemptConnection,
                                   child: isLoading
                                       ? const SizedBox(
                                           width: 22,
                                           height: 22,
-                                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              color: Colors.white),
                                         )
                                       : Text(isRegister ? "Register" : "Login",
-                                          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                                          style: const TextStyle(
+                                              fontSize: 17,
+                                              fontWeight: FontWeight.bold)),
                                 ),
                               ),
                             ],

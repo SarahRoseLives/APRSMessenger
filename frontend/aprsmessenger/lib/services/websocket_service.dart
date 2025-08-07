@@ -46,7 +46,7 @@ class WebSocketService with ChangeNotifier {
 
     try {
       final uri = Uri.parse('wss://aprs.chat/ws');
-//      final uri = Uri.parse('wss://aprs.chat/ws');
+      //final uri = Uri.parse('ws://localhost:8585/ws');
       _channel = WebSocketChannel.connect(uri);
 
       _socketSubscription = _channel!.stream.listen(
@@ -214,11 +214,24 @@ class WebSocketService with ChangeNotifier {
     _sendJson({"action": "request_data_export"});
   }
 
+  void requestAdminStats() {
+    if (_status != SocketStatus.connected) return;
+    _sendJson({"action": "get_admin_stats"});
+  }
+
   void deleteAccount(String password) {
     if (_status != SocketStatus.connected) return;
     _sendJson({
       "action": "delete_account",
       "password": password,
+    });
+  }
+
+  void sendAdminBroadcast(String message) {
+    if (_status != SocketStatus.connected) return;
+    _sendJson({
+      "action": "admin_broadcast",
+      "message": message,
     });
   }
 

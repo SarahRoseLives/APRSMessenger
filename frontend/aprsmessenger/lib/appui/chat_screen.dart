@@ -53,6 +53,26 @@ class _ChatScreenState extends State<ChatScreen> {
         final from = (msg["from"] as String).toUpperCase();
         final to = (msg["to"] as String).toUpperCase();
 
+        // Handle Admin messages separately
+        if (from == 'ADMIN') {
+          if (widget.contact.isAdminMessage) {
+            final messageId = msg['messageId']?.toString() ??
+                DateTime.now().millisecondsSinceEpoch.toString();
+            if (_messages.any((m) => m.messageId == messageId)) return;
+
+            setState(() {
+              _messages.add(ChatMessage(
+                messageId: messageId,
+                fromMe: false, // Always from admin
+                text: msg["message"] ?? "",
+                time: _formatTime(msg["created_at"]),
+              ));
+            });
+            _scrollToBottom();
+          }
+          return;
+        }
+
         final userBaseCallsign = _socketService.callsign!.split('-').first;
         final fromBaseCallsign = from.split('-').first;
         final fromMe = fromBaseCallsign == userBaseCallsign;
@@ -61,7 +81,8 @@ class _ChatScreenState extends State<ChatScreen> {
         final otherPartyBaseCallsign = (fromMe ? to : from).split('-').first;
 
         // --- FIX: Always extract messageId and use for de-duplication and ChatMessage ---
-        final messageId = msg['messageId']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString();
+        final messageId = msg['messageId']?.toString() ??
+            DateTime.now().millisecondsSinceEpoch.toString();
 
         // Check if the message belongs to this conversation group
         if (otherPartyBaseCallsign == widget.contact.groupingId) {
@@ -91,7 +112,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _sendMessage() {
     final text = _chatController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || widget.contact.isAdminMessage) return;
 
     _socketService.sendMessage(
         toCallsign: _currentReplyTo,
@@ -148,10 +169,18 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isReadOnly = widget.contact.isAdminMessage;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.contact.groupingId), // Display the base callsign
         elevation: 1,
+        backgroundColor:
+            isReadOnly ? Colors.red.shade700 : theme.appBarTheme.backgroundColor,
+        foregroundColor: isReadOnly ? Colors.white : theme.appBarTheme.foregroundColor,
+        iconTheme: IconThemeData(
+          color: isReadOnly ? Colors.white : theme.appBarTheme.iconTheme?.color,
+        ),
       ),
       body: Column(
         children: [
@@ -163,39 +192,41 @@ class _ChatScreenState extends State<ChatScreen> {
               itemBuilder: (context, i) => ChatBubble(message: _messages[i]),
             ),
           ),
-          Container(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-            color: Colors.white,
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _chatController,
-                    decoration: InputDecoration(
-                      hintText: "Type a message to $_currentReplyTo...",
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(48),
-                        borderSide: BorderSide.none,
+          if (!isReadOnly)
+            Container(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              color: Colors.white,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _chatController,
+                      decoration: InputDecoration(
+                        hintText: "Type a message to $_currentReplyTo...",
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(48),
+                          borderSide: BorderSide.none,
+                        ),
+                        filled: true,
+                        fillColor: Colors.grey.shade100,
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 10),
                       ),
-                      filled: true,
-                      fillColor: Colors.grey.shade100,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                      onSubmitted: (_) => _sendMessage(),
                     ),
-                    onSubmitted: (_) => _sendMessage(),
                   ),
-                ),
-                const SizedBox(width: 8),
-                CircleAvatar(
-                  backgroundColor: theme.colorScheme.primary,
-                  child: IconButton(
-                    icon: const Icon(Icons.send, color: Colors.white),
-                    onPressed: _sendMessage,
-                    tooltip: 'Send',
+                  const SizedBox(width: 8),
+                  CircleAvatar(
+                    backgroundColor: theme.colorScheme.primary,
+                    child: IconButton(
+                      icon: const Icon(Icons.send, color: Colors.white),
+                      onPressed: _sendMessage,
+                      tooltip: 'Send',
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
         ],
       ),
     );

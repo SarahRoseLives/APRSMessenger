@@ -242,6 +242,17 @@ func (sm *SessionsManager) GetSession(callsign string) *Session {
 	return sm.sessions[callsign]
 }
 
+// BroadcastToAll sends a message to all active sessions, regardless of user.
+func (sm *SessionsManager) BroadcastToAll(payload map[string]interface{}) {
+	sm.Lock()
+	defer sm.Unlock()
+	log.Printf("[APRS] Broadcasting message to %d active sessions", len(sm.sessions))
+	for _, session := range sm.sessions {
+		// This sends to ALL attached clients for a given user session
+		session.SendAll(payload)
+	}
+}
+
 // GenerateSessionToken creates a new, random token for a user.
 // Token remains valid until it is used for login (single-use).
 func (sm *SessionsManager) GenerateSessionToken(callsign string) (string, error) {

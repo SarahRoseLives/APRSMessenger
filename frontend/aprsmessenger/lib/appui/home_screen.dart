@@ -96,6 +96,7 @@ class _HomeScreenState extends State<HomeScreen> {
         final text = msg["message"] ?? "";
         final createdAt = msg["created_at"];
         final isHistory = msg["history"] == true;
+        final bool isAdminMsg = from == 'ADMIN';
 
         final routeHops = msg['route'] != null && msg['route'] is List
             ? (msg['route'] as List)
@@ -109,7 +110,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
         final otherPartyCallsign = fromMe ? to : from;
         final ownCallsignForChat = fromMe ? from : to;
-        final groupingKey = otherPartyCallsign.split('-').first;
+        final groupingKey =
+            isAdminMsg ? 'ADMIN' : otherPartyCallsign.split('-').first;
 
         final messageId = msg['messageId']?.toString() ??
             DateTime.now().millisecondsSinceEpoch.toString();
@@ -126,13 +128,14 @@ class _HomeScreenState extends State<HomeScreen> {
         if (idx == -1) {
           recents.add(RecentContact(
             groupingId: groupingKey,
-            callsign: otherPartyCallsign,
-            ownCallsign: ownCallsignForChat,
+            callsign: isAdminMsg ? 'ADMIN' : otherPartyCallsign,
+            ownCallsign: isAdminMsg ? 'ADMIN' : ownCallsignForChat,
             lastMessage: text,
             time: _formatTime(createdAt),
             unread: !fromMe && !isHistory,
             messages: [newMessage],
             route: routeHops,
+            isAdminMessage: isAdminMsg,
           ));
         } else {
           final contact = recents[idx];
@@ -148,16 +151,21 @@ class _HomeScreenState extends State<HomeScreen> {
               .sort((a, b) => (a.time ?? "").compareTo(b.time ?? ""));
 
           recents[idx] = contact.copyWith(
-            callsign: otherPartyCallsign,
-            ownCallsign: ownCallsignForChat,
+            callsign: isAdminMsg ? 'ADMIN' : otherPartyCallsign,
+            ownCallsign: isAdminMsg ? 'ADMIN' : ownCallsignForChat,
             lastMessage: text,
             time: _formatTime(createdAt),
             unread: (!fromMe && !isHistory) || contact.unread,
             messages: updatedMessages,
             route: routeHops ?? contact.route,
+            isAdminMessage: isAdminMsg,
           );
         }
-        recents.sort((a, b) => (b.time).compareTo(a.time));
+        recents.sort((a, b) {
+          if (a.isAdminMessage && !b.isAdminMessage) return -1;
+          if (!a.isAdminMessage && b.isAdminMessage) return 1;
+          return (b.time).compareTo(a.time);
+        });
         if (mounted) {
           setState(() {});
         }
@@ -188,14 +196,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     Navigator.of(context).pop();
                     _showDeleteConversationDialog(contact);
                   }),
-              ListTile(
-                leading: const Icon(Icons.block),
-                title: Text('Block ${contact.groupingId}'),
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _showBlockCallsignDialog(contact);
-                },
-              ),
+              if (!contact.isAdminMessage)
+                ListTile(
+                  leading: const Icon(Icons.block),
+                  title: Text('Block ${contact.groupingId}'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _showBlockCallsignDialog(contact);
+                  },
+                ),
             ],
           ),
         );
@@ -216,6 +225,7 @@ class _HomeScreenState extends State<HomeScreen> {
               child: const Text("Cancel")),
           TextButton(
             onPressed: () {
+              // For admin messages, the callsign is "ADMIN". For others, it's the contact's callsign.
               _socketService.deleteConversation(contact.callsign);
               Navigator.of(context).pop();
             },
@@ -424,8 +434,12 @@ class _HomeScreenState extends State<HomeScreen> {
               tooltip: "Admin Panel",
               onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute(
-                    builder: (_) => AdminPanelScreen(
-                        callsign: socketService.callsign!)),
+                  builder: (_) => ChangeNotifierProvider.value(
+                    value: socketService,
+                    child: AdminPanelScreen(
+                        callsign: socketService.callsign!),
+                  ),
+                ),
               ),
             ),
           PopupMenuButton<String>(
@@ -454,7 +468,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 value: 'delete_account',
                 child: ListTile(
                   leading: Icon(Icons.delete_forever, color: Colors.red),
-                  title: Text('Delete Account', style: TextStyle(color: Colors.red)),
+                  title: Text('Delete Account',
+                      style: TextStyle(color: Colors.red)),
                 ),
               ),
               const PopupMenuDivider(),
@@ -478,7 +493,8 @@ class _HomeScreenState extends State<HomeScreen> {
             child: ContactTile(
               contact: contact,
               displayTime: _displayTime(contact.time),
-              selected: false, // Mobile UI doesn't have a "selected" state in the list
+              selected:
+                  false, // Mobile UI doesn't have a "selected" state in the list
               onTap: () async {
                 _navigateToChat(contact.callsign);
               },
